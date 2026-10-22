@@ -12,14 +12,15 @@
 #   3. test the application (deploy.sh check); a broken base stops here
 #   4. Claude Code evaluates the task and implements it, on the code only (build with Maven,
 #      no access to Nevia or GitHub); no change, or a broken build, stops here
-#   5. test the new code: checkpoint the application and branch the database, restore the
-#      checkpoint into a sandbox wired to the branch, deploy the new code there, run the checks
+#   5. test the new code: checkpoint the application, restore it into a sandbox, deploy the new
+#      code there with deploy.sh in sandbox mode (it gives the sandbox a database of its own,
+#      according to the change's `database` file), run the checks
 #   6. push a branch and open a PR with the results and the sandbox as preview
 # Claude never runs git or nevia: git, GitHub and the Nevia resources are handled by this script.
 #
 # Env: stored on the computer (agent.sh setup): GITHUB_TOKEN, AGENT_NEVIA_KEY; given at each exec
 # (from agent.sh's .env): AGENT, AGENT_NEVIA_WORKSPACE, REPO, BASE_BRANCH, BASE_COMPUTER,
-# BASE_DATABASE, CLAUDE_MODEL (optional).
+# CLAUDE_MODEL (optional).
 set -eu
 
 JDK_MAJOR=21
@@ -29,7 +30,7 @@ BASE=$HOME/agent
 mkdir -p "$BASE/log" "$BASE/tmp" "$BASE/runs"
 
 say() { echo "[agent] $*"; }
-step() { printf '\n\033[1m[agent] == %s\033[0m\n' "$*"; }
+step() { printf '\n\033[1m[agent] ─── %s ───\033[0m\n' "$*"; }
 die() { echo "[agent] error: $*" >&2; exit 1; }
 
 [ -n "${AGENT_NEVIA_KEY:-}" ] || die "missing env AGENT_NEVIA_KEY: ./agent.sh setup"
@@ -39,7 +40,6 @@ done
 CMD=${1:-}
 BASE_BRANCH=${BASE_BRANCH:-main}
 BASE_COMPUTER=${BASE_COMPUTER:-hello-app}
-BASE_DATABASE=${BASE_DATABASE:-hello-pg}
 
 # The Nevia default image ships the nevia CLI and Claude Code.
 command -v nevia >/dev/null || die "nevia CLI not found on this computer"
@@ -64,25 +64,28 @@ key_on
 nv() { nevia --non-interactive "$@"; }
 nv whoami >/dev/null 2>&1 || die "the agent's Nevia key is not valid: run ./agent.sh setup --rotate"
 
-# status_json <computer|pg> <name>: the resource as JSON, nothing if it doesn't exist (exit 3).
+# status_json <computer>: the computer as JSON, nothing if it doesn't exist (exit 3).
 status_json() {
-  if [ "$1" = pg ]; then set -- pg status "$2"; else set -- status "$2"; fi
-  rc=0; out=$(nv --json "$@") || rc=$?
+  rc=0; out=$(nv --json status "$1") || rc=$?
   case $rc in
     0) printf '%s' "$out" ;;
     3) ;;
-    *) die "nevia $* failed (exit $rc)" ;;
+    *) printf '%s\n' "$out" >&2; die "nevia status $1 failed (exit $rc)" ;;
   esac
 }
 json_field() { printf '%s' "$1" | jq -r --arg k "$2" 'first(.. | objects | select(has($k)) | .[$k]) // empty'; }
-has_secret() { nv --json secrets ls | jq -e --arg n "$1" 'any(.secrets[]; .name == $n)' >/dev/null; }
 
 # sandbox_names <run>: the names of a run's sandbox.
 sandbox_names() {
   case ${1:-} in ''|*[!0-9]*) die "a run id is digits only, got '${1:-}'" ;; esac
-  CHECKPOINT=agent-$1 SANDBOX_COMPUTER=$BASE_COMPUTER-$1 SANDBOX_DATABASE=$BASE_DATABASE-$1
-  SANDBOX_SECRET=AGENT_DATABASE_URL_$1
+  CHECKPOINT=agent-$1 SANDBOX_COMPUTER=$BASE_COMPUTER-$1
 }
+
+# The resources of a run's sandbox: whatever deploy.sh created for it is named <name>-<run>
+# (computers, Postgres databases) or <NAME>_<run> (secrets), so they are found by that suffix.
+run_computers() { nv --json ls | jq -r --arg s "-$1" '.computers[].name | select(endswith($s))'; }
+run_databases() { nv --json pg ls | jq -r --arg s "-$1" '[.. | objects | select(has("name")) | .name] | unique[] | select(endswith($s))'; }
+run_secrets() { nv --json secrets ls | jq -r --arg s "_$1" '.secrets[].name | select(endswith($s))'; }
 
 # going: whether a run is going (a live process that has written no status yet).
 going() {
@@ -133,26 +136,25 @@ case $CMD in
     sleep_if_idle; exit 0 ;;
   preview)
     sandbox_names "${2:-}"
-    json=$(status_json computer "$SANDBOX_COMPUTER")
+    json=$(status_json "$SANDBOX_COMPUTER")
     [ -n "$json" ] || die "no sandbox for run $2"
-    say "waking $SANDBOX_DATABASE and $SANDBOX_COMPUTER"
-    nv pg awake "$SANDBOX_DATABASE" --wait >/dev/null 2>&1 || true
-    nv awake "$SANDBOX_COMPUTER" --wait >/dev/null 2>&1 || true
+    # The database first: the app retries it at startup, not the other way round.
+    for d in $(run_databases "$2"); do say "waking $d"; nv pg awake "$d" --wait >/dev/null 2>&1 || true; done
+    for c in $(run_computers "$2" | grep -vx "$SANDBOX_COMPUTER") "$SANDBOX_COMPUTER"; do
+      say "waking $c"; nv awake "$c" --wait >/dev/null 2>&1 || true
+    done
     say "preview: $(json_field "$json" url)"
     sleep_if_idle; exit 0 ;;
   cleanup)
     # Idempotent; the computer goes first: a checkpoint can't be deleted while a computer
     # restored from it is live.
     sandbox_names "${2:-}"
-    if [ -n "$(status_json computer "$SANDBOX_COMPUTER")" ]; then
+    if [ -n "$(status_json "$SANDBOX_COMPUTER")" ]; then
       say "deleting computer $SANDBOX_COMPUTER"; nv --yes rm "$SANDBOX_COMPUTER" --wait >/dev/null
     fi
-    if [ -n "$(status_json pg "$SANDBOX_DATABASE")" ]; then
-      say "deleting database branch $SANDBOX_DATABASE"; nv --yes pg rm "$SANDBOX_DATABASE" --wait >/dev/null
-    fi
-    if has_secret "$SANDBOX_SECRET"; then
-      say "deleting secret $SANDBOX_SECRET"; nv --yes secrets unset "$SANDBOX_SECRET" >/dev/null
-    fi
+    for c in $(run_computers "$2"); do say "deleting computer $c"; nv --yes rm "$c" --wait >/dev/null; done
+    for d in $(run_databases "$2"); do say "deleting database $d"; nv --yes pg rm "$d" --wait >/dev/null; done
+    for s in $(run_secrets "$2"); do say "deleting secret $s"; nv --yes secrets unset "$s" >/dev/null; done
     if nv checkpoint status -c "$BASE_COMPUTER" "$CHECKPOINT" >/dev/null 2>&1; then
       say "deleting checkpoint $CHECKPOINT"; nv --yes checkpoint rm -c "$BASE_COMPUTER" "$CHECKPOINT" >/dev/null
     fi
@@ -232,13 +234,13 @@ logged() {
 # --- 2+3. launch the database and the application, test them --------------------
 # An app that already runs and passes its checks is kept as is (no rebuild, no restart): the
 # sandbox gets the new code anyway. Otherwise (missing, asleep, failing) it is deployed.
-step "2/6 launching the app on $BASE_COMPUTER + $BASE_DATABASE, 3/6 testing it"
-if COMPUTER=$BASE_COMPUTER PG_DATABASE=$BASE_DATABASE logged "$BASE/log/base.log" ./deploy.sh check; then
+step "2/6 launching the app on $BASE_COMPUTER, 3/6 testing it"
+if COMPUTER=$BASE_COMPUTER logged "$BASE/log/base.log" ./deploy.sh check; then
   say "$BASE_COMPUTER already runs and passes its checks: not redeployed"
   BASE_STATE="already running"
 else
   say "$BASE_COMPUTER is not running or fails its checks: deploying $BASE_BRANCH"
-  COMPUTER=$BASE_COMPUTER PG_DATABASE=$BASE_DATABASE logged "$BASE/log/base.log" ./deploy.sh deploy ||
+  COMPUTER=$BASE_COMPUTER logged "$BASE/log/base.log" ./deploy.sh deploy ||
     die "$BASE_BRANCH does not pass its checks on $BASE_COMPUTER: no PR"
   BASE_STATE="\`$BASE_BRANCH\` deployed"
 fi
@@ -251,6 +253,9 @@ $TASK
 
 Context:
 - The application is a Maven project (pom.xml).
+- The file \`database\` (one word: mongo or postgres) tells deploy.sh which database to give the
+  application, and the environment variables it gets (see README.md). If the task changes the
+  database, change that file along with the code.
 - You work on the code only. After you, the pipeline deploys your change to a sandbox (a copy of
   the application and of its database) and checks GET /healthz and GET /; if that fails, no PR.
 
@@ -261,7 +266,7 @@ Steps:
 3. Validate it with \`mvn -q -B package\` (add or adapt tests when it makes sense).
 
 Rules:
-- Do not run git. Do not modify deploy.sh or bootstrap.sh.
+- Do not run git. Do not modify deploy.sh, bootstrap.sh or mongo/bootstrap.sh.
 - Your final reply is the pull request, in exactly this form and nothing else:
   <title>a short imperative title, under 72 characters, e.g. Reject non-GET requests on /</title>
   <body>GitHub markdown with the sections \"## Task evaluation\", \"## Solution\" and \"## Tests\"
@@ -278,7 +283,7 @@ env -u GITHUB_TOKEN -u NEVIA_KEY_FILE -u NEVIA_WORKSPACE \
   claude -p "$PROMPT" --output-format json --max-turns 60 \
     --permission-mode acceptEdits \
     --allowedTools "Read,Edit,Write,Glob,Grep,Bash(mvn:*)" \
-    --disallowedTools "Edit(./deploy.sh),Write(./deploy.sh),Edit(./bootstrap.sh),Write(./bootstrap.sh)" \
+    --disallowedTools "Edit(./deploy.sh),Write(./deploy.sh),Edit(./bootstrap.sh),Write(./bootstrap.sh),Edit(./mongo/bootstrap.sh),Write(./mongo/bootstrap.sh)" \
     ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} \
     > "$BASE/tmp/result.json" 2>> "$BASE/log/claude.log" ||
   tail -20 "$BASE/log/claude.log" >&2
@@ -301,30 +306,37 @@ jq -r '
   | "\(.[0] | sub("^#+\\s*"; "") | gsub("\\s+"; " ") | .[0:120])\n\n\(.[1])"
 ' "$BASE/tmp/result.json" > "$BASE/tmp/pr.md" || die "Claude Code failed: no PR"
 
+# Claude works silently (--output-format json gives one object at the end): its reply, the one
+# that becomes the pull request, is printed here so the run's log shows what it decided.
+jq -r '"\(.num_turns // "?") turns, \(((.duration_ms // 0) / 1000) | floor) s\(if .total_cost_usd then ", $\(.total_cost_usd * 100 | round / 100)" else "" end)"' \
+  "$BASE/tmp/result.json" 2>/dev/null | while read -r l; do say "Claude done: $l"; done
+say "Claude's proposal (becomes the pull request):"
+sed 's/^/  /' "$BASE/tmp/pr.md"
+echo
+
 # Edits to the deploy scripts are refused above; drop any that slipped through anyway.
-for p in deploy.sh bootstrap.sh; do
+for p in deploy.sh bootstrap.sh mongo/bootstrap.sh; do
   if git ls-files --error-unmatch "$p" >/dev/null 2>&1; then git checkout -q -- "$p"; git clean -qfd -- "$p"; fi
 done
 if [ -z "$(git status --porcelain)" ]; then
-  say "no change proposed, no sandbox, no PR:"
-  cat "$BASE/tmp/pr.md"
+  # The reply is printed above, whatever it says.
+  say "no change proposed, no sandbox, no PR"
   exit 0
 fi
-say "build"
+step "building the change (mvn package)"
 mvn -q -B package >> "$BASE/log/build.log" 2>&1 ||
   { tail -40 "$BASE/log/build.log" >&2; die "build fails with the agent's change: no sandbox, no PR"; }
 
-# --- 5. test the new code: checkpoint of the app, branch of the database -----------
-step "5/6 testing the change: checkpoint $CHECKPOINT of $BASE_COMPUTER, branch $SANDBOX_DATABASE of $BASE_DATABASE"
+# --- 5. test the new code: checkpoint of the app, sandbox deployed by the app's deploy.sh ---
+step "5/6 testing the change: checkpoint $CHECKPOINT of $BASE_COMPUTER, sandbox $SANDBOX_COMPUTER"
 nv checkpoint create -c "$BASE_COMPUTER" --name "$CHECKPOINT" --wait >/dev/null
-nv pg branch "$BASE_DATABASE" -b "$SANDBOX_DATABASE" --wait >/dev/null
 nv restore "$CHECKPOINT" -c "$BASE_COMPUTER" --name "$SANDBOX_COMPUTER" --wait >/dev/null
 
 # Right after a restore, the sandbox's network (DNS) may not answer yet; *.live.nevia.cloud
 # is a wildcard, so a lookup that succeeds means the network is up. Wait until the sandbox
-# resolves the branch host several times in a row (the app also retries at startup).
-host=$(nv --json pg status "$SANDBOX_DATABASE" | jq -r '.database.host // empty')
-[ -n "$host" ] || die "no host for $SANDBOX_DATABASE (cleanup: ./agent.sh cleanup $RUN)"
+# resolves a host there several times in a row (the app also retries at startup).
+host=$(json_field "$(status_json "$BASE_COMPUTER")" url | sed 's#^https://##; s#[:/].*##')
+[ -n "$host" ] || die "no host for $BASE_COMPUTER (cleanup: ./agent.sh cleanup $RUN)"
 say "waiting for $SANDBOX_COMPUTER to resolve $host"
 i=0 ok=0
 while [ $ok -lt 5 ]; do
@@ -334,10 +346,11 @@ while [ $ok -lt 5 ]; do
   sleep 2
 done
 
-# The app's deploy.sh with the sandbox names: stores the branch URI in its own secret, points the
-# restored computer at it, pushes the working tree (the new code), restarts the app and checks it.
-say "deploying the change on $SANDBOX_COMPUTER + $SANDBOX_DATABASE"
-COMPUTER=$SANDBOX_COMPUTER PG_DATABASE=$SANDBOX_DATABASE SECRET_DATABASE_URL=$SANDBOX_SECRET \
+# The app's deploy.sh in sandbox mode: gives the sandbox a database of its own (a branch of the
+# stack's, or a new one when the change switches database), points the restored computer at it,
+# pushes the working tree (the new code), restarts the app and checks it.
+say "deploying the change on $SANDBOX_COMPUTER (SANDBOX=$RUN, database: $(tr -d '[:space:]' < database 2>/dev/null))"
+COMPUTER=$SANDBOX_COMPUTER SANDBOX=$RUN \
   logged "$BASE/log/validation.log" ./deploy.sh deploy ||
   die "the change fails its checks on $SANDBOX_COMPUTER: no PR (sandbox kept: ./agent.sh cleanup $RUN)"
 SANDBOX_URL=$(nv --json status "$SANDBOX_COMPUTER" | jq -r 'first(.. | objects | select(has("url")) | .url) // empty')
@@ -349,10 +362,10 @@ TITLE=$(head -n 1 "$BASE/tmp/pr.md")
 BRANCH="agent/$RUN"
 {
   printf '\n## Automated validation\n\n'
-  printf -- '- `%s` + `%s` checked before the change (%s).\n' "$BASE_COMPUTER" "$BASE_DATABASE" "$BASE_STATE"
+  printf -- '- `%s` checked before the change (%s).\n' "$BASE_COMPUTER" "$BASE_STATE"
   printf -- '- With this change, `mvn package` passes.\n'
-  printf -- '- Sandbox: computer `%s` restored from checkpoint `%s`, database `%s` branched from `%s`.\n' \
-    "$SANDBOX_COMPUTER" "$CHECKPOINT" "$SANDBOX_DATABASE" "$BASE_DATABASE"
+  printf -- '- Sandbox: computer `%s` restored from checkpoint `%s`, database given by `deploy.sh` (`SANDBOX=%s`, `database`: `%s`).\n' \
+    "$SANDBOX_COMPUTER" "$CHECKPOINT" "$RUN" "$(tr -d '[:space:]' < database)"
   printf -- '- `deploy.sh deploy` of this change on the sandbox returns:\n\n```\n'
   sed 's/\x1b\[[0-9;]*m//g' "$BASE/log/validation.log" | grep -v '^\[helloworld\]' | tail -8
   printf '```\n\n## Preview\n\n%s (running)\n\n```sh\n./agent.sh preview %s   # wake it if it was put to sleep\n./agent.sh cleanup %s   # delete it once the PR is merged or closed\n```\n' \
@@ -374,5 +387,5 @@ url=$(curl -fsS -X POST "https://api.github.com/repos/$REPO/pulls" \
   die "branch $BRANCH pushed but the pull request could not be created"
 
 # The sandbox stays up as the PR's live preview, until ./agent.sh cleanup.
-say "preview: $SANDBOX_URL (sandbox $SANDBOX_COMPUTER + $SANDBOX_DATABASE, running)"
+say "preview: $SANDBOX_URL (sandbox $SANDBOX_COMPUTER, running)"
 say "pull request: $url"

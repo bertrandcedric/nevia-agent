@@ -12,10 +12,10 @@ flowchart LR
         direction LR
         agent["Computer hello-agent<br/>Claude Code"]
         secrets[/"Secrets<br/>GITHUB_TOKEN<br/>NEVIA_AGENT_KEY"/]
-        base["App stack<br/>hello-app + hello-pg"]
+        base["App stack<br/>hello-app + its database"]
         subgraph sandbox["Sandbox of a run"]
             sbapp["hello-app-RUN<br/>(checkpoint)"]
-            sbpg[("hello-pg-RUN<br/>(branch)")]
+            sbdb[("database-RUN<br/>(branch or new)")]
         end
     end
 
@@ -27,7 +27,7 @@ flowchart LR
 
 - **hello-agent**: the agent's computer, with no public port. It has its own Nevia identity: the `hello-agent` principal, role *editor*, whose key is in the `NEVIA_AGENT_KEY` secret.
 - **Your machine** only creates and deletes the agent (`setup`, `destroy`). For everything else, `agent.sh` wakes `hello-agent` if it sleeps, pushes `agent-bootstrap.sh` to it with `nevia exec` and follows it: git, the build, Claude and every Nevia resource (secrets, checkpoint, branch, sandbox) are handled on the agent, which goes back to sleep once idle.
-- **Sandbox**: a copy of the app (checkpoint of its computer) and of its database (branch), created after Claude's work to test the new code. It then stays running as the PR's live preview, until `cleanup`.
+- **Sandbox**: a copy of the app (checkpoint of its computer) and a database of its own, created after Claude's work to test the new code. The app's `deploy.sh` provides that database, from the change's `database` file: a branch of the stack's database (a copy of the data) when the change keeps the same kind, a new empty one when it switches, e.g. from MongoDB to Postgres. It then stays running as the PR's live preview, until `cleanup`.
 
 ## Workflow of a run
 
@@ -37,14 +37,14 @@ sequenceDiagram
     actor dev as agent.sh run
     participant agent as hello-agent
     participant gh as GitHub
-    participant base as hello-app + hello-pg
+    participant base as hello-app + database
     participant sb as Sandbox
 
     dev->>agent: wakes the agent if it sleeps, pushes agent-bootstrap.sh, starts the run in the background
     agent->>gh: clones the base branch, checks push rights
     agent->>base: the app's deploy.sh: checks the app, deploys the base branch if it isn't running (failure: stop)
     Note over agent: Claude evaluates the task and codes it, Maven build<br/>(no access to Nevia or GitHub)<br/>no change or broken build: stop
-    agent->>sb: checkpoint of the app, branch of the database
+    agent->>sb: checkpoint of the app, then deploy.sh with SANDBOX=RUN: database of its own
     agent->>sb: deploys the new code and tests it (failure: no PR)
     agent->>gh: pushes agent/RUN, PR (evaluation, solution, tests, preview)
     agent-->>dev: PR link
@@ -63,10 +63,11 @@ agent-bootstrap.sh  runs on the agent computer: the run, ls, preview, cleanup, g
 
 The agent depends on the application only through its interface, at the root of the cloned repository:
 
-- `deploy.sh check` and `deploy.sh deploy`: check, or deploy and check, the stack picked by `COMPUTER`, `PG_DATABASE` and `SECRET_DATABASE_URL`. The exit code tells whether the checks pass.
+- `deploy.sh check` and `deploy.sh deploy`: check, or deploy and check, the app on `COMPUTER`. With `SANDBOX=<run>`, `deploy.sh deploy` also gives that computer a database of its own, named with the suffix `-<run>` (secrets: `_<run>`), which is how `preview` and `cleanup` find it. The exit code tells whether the checks pass.
+- `database`: the database kind the app uses (`mongo` or `postgres`). Claude can change it along with the code, e.g. for a migration; the deploy scripts don't change.
 - `pom.xml`: the build.
 
-Any repository with this interface can be picked at `run`; its stack is the one named by `APP_COMPUTER` and `APP_DATABASE` in `.env` (`hello-app` and `hello-pg` by default), so set them for another app. Claude can change the app's code, but not `deploy.sh` or `bootstrap.sh`.
+Any repository with this interface can be picked at `run`; its app is the computer named by `APP_COMPUTER` in `.env` (`hello-app` by default), so set it for another app. Claude can change the app's code, but not `deploy.sh`, `bootstrap.sh` or `mongo/bootstrap.sh`.
 
 ## One-time setup
 
@@ -87,7 +88,6 @@ Prerequisites: the `nevia` CLI (`curl -fsSL https://get.nevia.cloud | sh`), `jq`
 | `AGENT` | `hello-agent` | the agent's computer and Nevia principal |
 | `KEY_TTL` | `30d` | lifetime of the agent's Nevia key (`setup`) |
 | `APP_COMPUTER` | `hello-app` | the app's computer, checkpointed for each run |
-| `APP_DATABASE` | `hello-pg` | the app's database, branched for each run |
 
 ## Usage
 
@@ -98,7 +98,7 @@ Prerequisites: the `nevia` CLI (`curl -fsSL https://get.nevia.cloud | sh`), `jq`
 ./agent.sh logs [<run>]                          # follows a run, by default the latest (Ctrl-C stops following, not the run)
 ./agent.sh ls                                    # existing sandboxes
 ./agent.sh preview <run>                         # wakes a PR's sandbox if it sleeps, prints its URL
-./agent.sh cleanup <run>                         # deletes the sandbox (computer, branch, secret, checkpoint)
+./agent.sh cleanup <run>                         # deletes the sandbox (computers, databases and secrets of the run, checkpoint)
 ./agent.sh down                                  # puts the agent to sleep now (unless a run is going)
 ./agent.sh destroy [--yes]                       # deletes the agent's computer, its secrets and its Nevia principal (sandboxes kept)
 ./agent.sh setup [--rotate]

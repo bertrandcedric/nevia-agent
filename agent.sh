@@ -63,7 +63,6 @@ AGENT=${AGENT:-hello-agent}
 BASE_BRANCH=${BASE_BRANCH:-main}
 # The application the agent works on: its stack on Nevia.
 BASE_COMPUTER=${APP_COMPUTER:-hello-app}
-BASE_DATABASE=${APP_DATABASE:-hello-pg}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
 KEY_TTL=${KEY_TTL:-30d}
 KEY_SECRET=NEVIA_AGENT_KEY
@@ -81,7 +80,7 @@ nv() { nevia --non-interactive "$@"; }
 on_agent() {
   nv exec -e "AGENT=$AGENT" -e "AGENT_NEVIA_WORKSPACE=$NEVIA_WORKSPACE" \
     -e "REPO=$REPO" -e "BASE_BRANCH=$BASE_BRANCH" -e "BASE_COMPUTER=$BASE_COMPUTER" \
-    -e "BASE_DATABASE=$BASE_DATABASE" ${CLAUDE_MODEL:+-e "CLAUDE_MODEL=$CLAUDE_MODEL"} "$@"
+    ${CLAUDE_MODEL:+-e "CLAUDE_MODEL=$CLAUDE_MODEL"} "$@"
 }
 
 # wake: nevia exec never wakes a computer (it exits 5), so wake the agent first when it sleeps.
@@ -144,7 +143,7 @@ run() {
   pick_task
   wake
   RUN=$(date -u +%y%m%d%H%M%S)
-  log "run $RUN: agent on $REPO ($BASE_BRANCH), base stack $BASE_COMPUTER + $BASE_DATABASE"
+  log "run $RUN: agent on $REPO ($BASE_BRANCH), base app $BASE_COMPUTER"
   # base64 keeps any quoting in the task intact through nevia exec
   # The script is read before going to the background: once this exec returns, stdin is gone.
   on_agent "$AGENT" -- sh -c '
