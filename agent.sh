@@ -150,7 +150,7 @@ run() {
   on_agent "$AGENT" -- sh -c '
     mkdir -p ~/agent/runs && cd ~/agent/runs && cat > "$1.sh" || exit
     [ -s "$1.sh" ] || { echo "error: agent-bootstrap.sh arrived empty" >&2; exit 1; }
-    setsid sh -c "sh ./\$1.sh run \"\$1\" \"\$2\" > \$1.log 2>&1; echo \$? > \$1.status; sleep 20; sh ./\$1.sh sleep > /dev/null 2>&1" \
+    setsid sh -c "sh ./\$1.sh run \"\$1\" \"\$2\" > \$1.log 2>&1; echo \$? > \$1.status; sh ./\$1.sh sleep 20 > /dev/null 2>&1" \
       sh "$1" "$2" < /dev/null > /dev/null 2>&1 &' sh "$RUN" "$(printf '%s' "$TASK" | base64 | tr -d '\n')" \
     < "$DIR/agent-bootstrap.sh"
   log "started on $AGENT (Ctrl-C stops following, not the run: ./agent.sh logs $RUN)"

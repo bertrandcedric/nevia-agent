@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs ON the agent computer, sent by agent.sh through nevia exec:
-#   sh -s ls | preview <run> | cleanup <run> | sleep    script on stdin, from agent.sh
+#   sh -s ls | preview <run> | cleanup <run> | sleep [<delay>]   script on stdin, from agent.sh
 #   sh <run>.sh run <run> <task-b64>                      stored in ~/agent/runs, detached
 # Every command but run ends by putting this computer to sleep, unless a run is going; agent.sh
 # starts `sleep` once a run is done.
@@ -49,7 +49,7 @@ command -v nevia >/dev/null || die "nevia CLI not found on this computer"
 # exists only while this script needs nevia, not while Claude runs.
 NEVIA_KEY=$AGENT_NEVIA_KEY
 unset AGENT_NEVIA_KEY
-# Sleep stops every process: drop the key files of the processes that are gone.
+# Drop the key files of processes that are gone (killed while holding one).
 for f in "$BASE"/tmp/nevia-key.*; do
   [ -e "$f" ] || continue
   kill -0 "${f##*.}" 2>/dev/null || rm -f "$f"
@@ -84,8 +84,8 @@ sandbox_names() {
   SANDBOX_SECRET=AGENT_DATABASE_URL_$1
 }
 
-# sleep_if_idle: put this computer to sleep, unless a run is going (a live process, no status).
-sleep_if_idle() {
+# going: whether a run is going (a live process that has written no status yet).
+going() {
   for f in "$BASE"/runs/*.pid; do
     [ -e "$f" ] || continue
     if [ ! -e "${f%.pid}.status" ] && kill -0 "$(cat "$f")" 2>/dev/null; then
@@ -93,19 +93,38 @@ sleep_if_idle() {
       return 0
     fi
   done
-  say "putting $AGENT to sleep"
-  # In the background, a few seconds later, so that the exec calling this returns first. The key
-  # goes through a pipe, and into a file only while nevia needs it.
-  printf '%s\n' "$NEVIA_KEY" | setsid sh -c '
-    k=$(cat); sleep 3; f=$1/nevia-key.$$
-    (umask 077 && printf "%s\n" "$k" > "$f")
-    NEVIA_KEY_FILE=$f nevia --non-interactive suspend "$2" >/dev/null 2>&1; rm -f "$f"' \
-    sh "$BASE/tmp" "$AGENT" > /dev/null 2>&1 &
+  return 1
+}
+
+# sleep_if_idle [<delay>]: put this computer to sleep <delay> seconds from now (3 by default, so
+# that the exec calling this returns first), unless a run is going then.
+sleep_if_idle() {
+  going && return 0
+  say "putting $AGENT to sleep in ${1:-3} s"
+  id=$(nv --json status "$AGENT" | jq -r '.computer.id // empty')
+  [ -n "$id" ] || die "no id for $AGENT"
+  token=$(nv auth access-token)
+  # Sleep freezes processes and wakes resume them, so a pending sleep must not fire after a wake:
+  # one pending sleep at a time (the new one replaces it), dropped if the clock jumped (this
+  # computer slept meanwhile) or a run started; then one request, no retry (a `nevia suspend`
+  # frozen mid-call retries once woken). The token (valid about 15 minutes) goes through a pipe,
+  # no key file is left on disk.
+  [ ! -f "$BASE/tmp/sleep.pid" ] || kill "$(cat "$BASE/tmp/sleep.pid")" 2>/dev/null || true
+  export BASE AGENT
+  printf '%s\n' "$token" | setsid sh -c '
+    echo $$ > "$BASE/tmp/sleep.pid"
+    read -r t; t0=$(date +%s); sleep "$2"
+    [ $(($(date +%s) - t0)) -le $(($2 + 5)) ] || exit 0
+    for f in "$BASE"/runs/*.pid; do
+      [ -e "$f" ] && [ ! -e "${f%.pid}.status" ] && kill -0 "$(cat "$f")" 2>/dev/null && exit 0
+    done
+    curl -fsS --max-time 20 -X POST -H "Authorization: Bearer $t" "https://api.nevia.cloud/v1/computers/$1/sleep"' \
+    sh "$id" "${1:-3}" > /dev/null 2>&1 &
 }
 
 case $CMD in
   sleep)
-    sleep_if_idle; exit 0 ;;
+    sleep_if_idle "${2:-3}"; exit 0 ;;
   ls)
     nv --json ls | jq -r --arg p "$BASE_COMPUTER-" '
       .computers[] | select(.name | startswith($p)) | select(.name | ltrimstr($p) | test("^[0-9]+$"))
