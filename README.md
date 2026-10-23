@@ -1,6 +1,6 @@
 # Coding agent
 
-A Claude Code agent, on a Nevia computer, that works on the application of a GitHub repository (e.g. [nevia-helloworld](https://github.com/bertrandcedric/nevia-helloworld)) and proposes its changes as a pull request. It never pushes to the base branch (`BASE_BRANCH`, `main` by default) and never merges: review stays human.
+A Claude Code agent on a Nevia computer that migrates an app from MongoDB to Postgres (e.g. [nevia-helloworld](https://github.com/bertrandcedric/nevia-helloworld)) and proposes the change as a pull request. It never pushes to `main` and never merges.
 
 ## Architecture
 
@@ -8,109 +8,107 @@ A Claude Code agent, on a Nevia computer, that works on the application of a Git
 flowchart LR
     github[("GitHub")]
 
+    subgraph local["Your machine"]
+        direction TB
+        cli["agent.sh"]
+        m2p["migration/<br/>mongo2pg reports<br/>(schemas, stats, SQL, HTML)"]
+    end
+
     subgraph nevia["Nevia"]
         direction LR
-        agent["Computer hello-agent<br/>Claude Code"]
+        agent["hello-agent<br/>Claude Code + deploy/"]
         secrets[/"Secrets<br/>GITHUB_TOKEN<br/>NEVIA_AGENT_KEY"/]
-        base["App stack<br/>hello-app + its database"]
+        base["hello-app + hello-mongo"]
         subgraph sandbox["Sandbox of a run"]
             sbapp["hello-app-RUN<br/>(checkpoint)"]
-            sbdb[("database-RUN<br/>(branch or new)")]
+            sbdb[("hello-pg-RUN<br/>(new Postgres,<br/>local/postgres-init)")]
         end
     end
 
+    m2p -- "schemas, stats, SQL<br/>(no sample values)" --> cli
+    cli -- "scripts + analysis" --> agent
     secrets -. "env" .-> agent
-    agent -- "deploys, tests" --> base
+    agent -- "recreates, tests" --> base
     agent -- "creates, tests" --> sandbox
     agent -- "clone, PR" --> github
 ```
 
-- **hello-agent**: the agent's computer, with no public port. It has its own Nevia identity: the `hello-agent` principal, role *editor*, whose key is in the `NEVIA_AGENT_KEY` secret.
-- **Your machine** only creates and deletes the agent (`setup`, `destroy`). For everything else, `agent.sh` wakes `hello-agent` if it sleeps, pushes `agent-bootstrap.sh` to it with `nevia exec` and follows it: git, the build, Claude and every Nevia resource (secrets, checkpoint, branch, sandbox) are handled on the agent, which goes back to sleep once idle.
-- **Sandbox**: a copy of the app (checkpoint of its computer) and a database of its own, created after Claude's work to test the new code. The app's `deploy.sh` provides that database, from the change's `database` file: a branch of the stack's database (a copy of the data) when the change keeps the same kind, a new empty one when it switches, e.g. from MongoDB to Postgres. It then stays running as the PR's live preview, until `cleanup`.
-
-## Workflow of a run
+## Workflow of a migration
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor dev as agent.sh run
+    actor dev as You
+    participant m2p as mongo2pg
     participant agent as hello-agent
     participant gh as GitHub
-    participant base as hello-app + database
+    participant base as hello-app + MongoDB
     participant sb as Sandbox
 
-    dev->>agent: wakes the agent if it sleeps, pushes agent-bootstrap.sh, starts the run in the background
-    agent->>gh: clones the base branch, checks push rights
-    agent->>base: the app's deploy.sh: checks the app, deploys the base branch if it isn't running (failure: stop)
-    Note over agent: Claude evaluates the task and codes it, Maven build<br/>(no access to Nevia or GitHub)<br/>no change or broken build: stop
-    agent->>sb: checkpoint of the app, then deploy.sh with SANDBOX=RUN: database of its own
-    agent->>sb: deploys the new code and tests it (failure: no PR)
-    agent->>gh: pushes agent/RUN, PR (evaluation, solution, tests, preview)
+    dev->>m2p: mongo2pg infer on the local MongoDB
+    m2p-->>dev: reports in migration/: schemas, stats, infer warnings, SQL, HTML
+    dev->>agent: agent.sh migrate: scripts + reports (schemas, stats, SQL only, no sample values)
+    agent->>gh: clones main
+    agent->>base: recreates the app and MongoDB (seed data: local/mongo-init/*.js), checks them
+    Note over agent: Claude reads the reports (../analysis, read-only)<br/>moves the code to Postgres, answers each infer warning<br/>turns local/mongo-init/*.js into local/postgres-init/*.sql<br/>Maven build (no access to Nevia or GitHub)
+    agent->>sb: checkpoint of the app + new Postgres loaded with local/postgres-init (psql), deploys the new code, checks it
+    agent->>gh: pushes agent/RUN, opens the PR (migration, mongo2pg analysis table, tests, preview)
     agent-->>dev: PR link
-    Note over agent: 20 s later, goes to sleep (unless another run is going)
+    Note over agent: goes to sleep 20 s later
 ```
 
-The sandbox is only created if Claude produced a change that builds. If the new code fails there, the sandbox is kept for debugging.
+A step that fails stops the run, with no PR. The HTML reports and the data stay on your machine.
 
-## Code
+## Setup (once)
 
+Prerequisites: `nevia` (then `nevia login`), `jq`, `openssl`, and a GitHub fine-grained token on the app's repo (*Contents* and *Pull requests*: read and write).
+
+```sh
+cp .env.example .env          # set NEVIA_WORKSPACE, GITHUB_TOKEN, REPO
+./agent.sh setup              # agent computer, its Nevia key, the token as a secret
+nevia shell hello-agent       # then: claude, /login
 ```
-agent.sh            runs on your machine: creates and deletes the agent, pushes agent-bootstrap.sh to it, follows it
-agent-bootstrap.sh  runs on the agent computer: the run, ls, preview, cleanup, going to sleep
-.env.example        local config (copy to .env, ignored by git)
+
+## Data analysis (mongo2pg)
+
+From this folder, with the app's local MongoDB and Postgres running (`docker compose --profile postgres up -d` in the app):
+
+```sh
+mongo2pg init --project-base "$PWD/migration" --project-name nevia-helloworld --namespace hello \
+  --source-uri mongodb://127.0.0.1:27017 \
+  --target-uri "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"   # once
+mongo2pg infer -c migration/nevia-helloworld/config/nevia-helloworld.toml
 ```
 
-The agent depends on the application only through its interface, at the root of the cloned repository:
-
-- `deploy.sh check` and `deploy.sh deploy`: check, or deploy and check, the app on `COMPUTER`. With `SANDBOX=<run>`, `deploy.sh deploy` also gives that computer a database of its own, named with the suffix `-<run>` (secrets: `_<run>`), which is how `preview` and `cleanup` find it. The exit code tells whether the checks pass.
-- `database`: the database kind the app uses (`mongo` or `postgres`). Claude can change it along with the code, e.g. for a migration; the deploy scripts don't change.
-- `pom.xml`: the build.
-
-Any repository with this interface can be picked at `run`; its app is the computer named by `APP_COMPUTER` in `.env` (`hello-app` by default), so set it for another app. Claude can change the app's code, but not `deploy.sh`, `bootstrap.sh` or `mongo/bootstrap.sh`.
-
-## One-time setup
-
-Prerequisites: the `nevia` CLI (`curl -fsSL https://get.nevia.cloud | sh`), `jq`, then `nevia login`.
-
-1. Push the app's `main` to GitHub.
-2. Create a GitHub *fine-grained* token limited to the repositories the agent works on, with *Contents* and *Pull requests* set to *Read and write*.
-3. In this folder: `cp .env.example .env`, then set `NEVIA_WORKSPACE`, `GITHUB_TOKEN` and `REPO` in it.
-4. `./agent.sh setup`: copies the token into the `GITHUB_TOKEN` secret, creates the agent's Nevia identity (key valid 30 days) and the `hello-agent` computer, whose env references both secrets. Run it again after changing `GITHUB_TOKEN`; `setup --rotate` renews the key.
-5. Log Claude Code in once; it is already installed in the Nevia image, like the `nevia` CLI: `nevia shell hello-agent`, then `claude` and `/login`. The login stays on the computer's disk and is lost with `destroy`.
-
-`.env` holds the minimum: `NEVIA_WORKSPACE`, `GITHUB_TOKEN` (read by `setup` only) and `REPO`, the repo `run` clones. Optional settings, in `.env` or the shell; except `AGENT` and `KEY_TTL`, they are given to the agent at each command:
-
-| Variable | Default | Role |
-|---|---|---|
-| `BASE_BRANCH` | `main` | branch cloned, and base of the PRs |
-| `CLAUDE_MODEL` | Claude Code's default | model used by the agent |
-| `AGENT` | `hello-agent` | the agent's computer and Nevia principal |
-| `KEY_TTL` | `30d` | lifetime of the agent's Nevia key (`setup`) |
-| `APP_COMPUTER` | `hello-app` | the app's computer, checkpointed for each run |
+The project is named after the repo: `migrate` reads `migration/<repo name>`. `migration/` is not committed.
 
 ## Usage
 
 ```sh
-./agent.sh run                                   # default repo, asks for the task
-./agent.sh run "add a GET /visits endpoint"      # default repo, task given directly
-./agent.sh run --repo owner/name "..."           # another repo than REPO
-./agent.sh logs [<run>]                          # follows a run, by default the latest (Ctrl-C stops following, not the run)
-./agent.sh ls                                    # existing sandboxes
-./agent.sh preview <run>                         # wakes a PR's sandbox if it sleeps, prints its URL
-./agent.sh cleanup <run>                         # deletes the sandbox (computers, databases and secrets of the run, checkpoint)
-./agent.sh down                                  # puts the agent to sleep now (unless a run is going)
-./agent.sh destroy [--yes]                       # deletes the agent's computer, its secrets and its Nevia principal (sandboxes kept)
-./agent.sh setup [--rotate]
-./agent.sh help
+./agent.sh migrate                       # runs the migration of REPO, prints the PR link
+./agent.sh logs [<run>]                  # follows a run, Claude's steps included
+./agent.sh ls                            # sandboxes
+./agent.sh preview <run>                 # wakes a PR's sandbox, prints its URL
+./agent.sh cleanup <run>                 # deletes a sandbox
+./agent.sh purge [--yes]                 # deletes every run and the app with its databases (all data)
+./agent.sh destroy [--yes]               # deletes the agent
 ```
 
-Without a command, the script prints its help. `run` clones `REPO` (`owner/name`) from `.env` without asking; `--repo` picks another one. `run` requires a task: without an argument it asks for one (`Describe the task for the agent:`), and without a terminal it stops with an error. The more precise the task (what, where, expected behaviour), the better Claude can evaluate and implement it. A run's log is also on the agent, in `~/agent/runs/<run>.log`.
+The prompt is `tasks/mongo-to-postgres.txt`. All settings are in `.env` only (see `.env.example`), never in the shell or as arguments.
 
-The agent goes to sleep on its own: 20 s after a run ends (time for `agent.sh` to print the end of its log), and right after `ls`, `preview`, `cleanup` or `logs`, unless a run is going. Stopping `agent.sh` (Ctrl-C, laptop closed) doesn't change that.
+## Code
+
+```
+agent.sh                   on your machine: setup, migrate, follows the run
+agent-bootstrap.sh         on the agent: the run, ls, preview, cleanup
+tasks/mongo-to-postgres.txt   Claude's task
+deploy/deploy.sh           the deploy layer: deploy, recreate, check, down, destroy (SANDBOX=<run> for a sandbox)
+deploy/app/bootstrap.sh    on the app computer: JDK, Maven, build, start
+deploy/mongo/bootstrap.sh  on the MongoDB computer: MongoDB, tunnel, seed data (local/mongo-init)
+```
 
 ## Security
 
-- Claude works on the code only: the GitHub token and the Nevia key are not passed to it (removed from its environment, key file deleted while it runs), and its only command is Maven. A `ls`, `preview` or `cleanup` started during a run writes its own key file for a few seconds. The clone, the deployments, the sandbox, the push and the PR are done by the script.
-- The GitHub token only gives access to the repositories you chose for it. Protecting `main` (PR required) guarantees on GitHub's side that nothing is pushed to it directly.
-- The agent's Nevia key is *editor* on the whole workspace. To fully isolate the agent, use a dedicated workspace.
+- Claude has neither the GitHub token nor the Nevia key, only file tools and Maven.
+- It sees the structure of the data (fields, types, counts), never the values.
+- The agent's Nevia key is *editor* on the workspace: use a dedicated workspace to isolate it.

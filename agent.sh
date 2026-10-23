@@ -1,24 +1,17 @@
 #!/bin/sh
-# Run a Claude Code agent on a Nevia computer. The agent clones a GitHub repo, deploys and
-# tests its app, lets Claude work on the task (code only), tests the new code on a sandbox
-# (checkpoint of the app + branch of its database) and opens a pull request for review (it
-# never pushes to the base branch).
+# Migrate an app from MongoDB to Postgres with a Claude Code agent on Nevia: it opens a PR.
+# Config: .env only (see .env.example).
 #
-# Usage: ./agent.sh setup [--rotate]                    create the agent (computer, Nevia key, GitHub token), once
-#        ./agent.sh run [--repo owner/name] ["task"]    run the agent on a task (asked for when not given), on REPO or --repo
-#        ./agent.sh logs [<run>]                        follow a run, by default the latest (it goes on if you stop following)
-#        ./agent.sh ls                                  list the sandboxes left by previous runs
-#        ./agent.sh preview <run>                       wake a run's sandbox and print its URL
-#        ./agent.sh cleanup <run>                       delete a run's sandbox (computer, branch, secret, checkpoint)
-#        ./agent.sh down                                put the agent computer to sleep (unless a run is going)
-#        ./agent.sh destroy [--yes]                     delete the agent computer, its secrets and its Nevia principal
-#        ./agent.sh help                                this help
-#
-# Only setup and destroy manage Nevia from this machine. The other commands wake the agent
-# computer if it sleeps, push agent-bootstrap.sh to it and follow it: git, the build, Claude and
-# the Nevia resources are all handled there, and the agent goes back to sleep once idle.
-# Config comes from .env next to this script (see .env.example, ignored by git); Claude Code
-# uses the login done once on the agent computer (nevia shell hello-agent, then claude and /login).
+# Usage: ./agent.sh setup [--rotate]     create the agent, once
+#        ./agent.sh migrate              run the migration of REPO
+#        ./agent.sh logs [<run>]         follow a run (default: the latest)
+#        ./agent.sh ls                   list the sandboxes
+#        ./agent.sh preview <run>        wake a sandbox, print its URL
+#        ./agent.sh cleanup <run>        delete a sandbox
+#        ./agent.sh purge [--yes]        delete every run, the app and its databases
+#        ./agent.sh down                 put the agent to sleep
+#        ./agent.sh destroy [--yes]      delete the agent
+#        ./agent.sh help                 this help
 set -eu
 
 DIR=$(cd "$(dirname "$0")" && pwd)
@@ -30,23 +23,23 @@ CMD=${1:-}
 case $CMD in
   '')             usage; exit 1 ;;
   -h|--help|help) usage; exit 0 ;;
-  run)
-    # Without --repo, REPO from .env; without a task, it is asked for in run().
-    shift
-    REPO_ARG=
-    if [ "${1:-}" = --repo ]; then
-      [ -n "${2:-}" ] || { printf 'error: --repo needs owner/name\n\n' >&2; usage >&2; exit 1; }
-      REPO_ARG=$2; shift 2
-    fi
-    TASK=${1:-} ;;
-  setup|ls|logs|preview|cleanup|down|destroy) ;;
+  migrate)
+    # The repo is REPO in .env, the task the file's: migrate takes no argument.
+    if [ -n "${2:-}" ]; then
+      printf 'error: migrate takes no argument: set REPO in .env, edit tasks/mongo-to-postgres.txt for the task\n\n' >&2
+      usage >&2; exit 1
+    fi ;;
+  setup|ls|logs|preview|cleanup|purge|down|destroy) ;;
   *)              printf 'error: unknown command "%s"\n\n' "$1" >&2; usage >&2; exit 1 ;;
 esac
 
 log() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# load_env <file>: export KEY=VALUE lines not already set in the shell (values never echoed).
+# The settings read from .env: whatever the shell has for them is dropped, so .env alone decides.
+unset NEVIA_WORKSPACE GITHUB_TOKEN REPO BASE_BRANCH CLAUDE_MODEL CLAUDE_MAX_TURNS AGENT KEY_TTL \
+  APP_COMPUTER MIGRATION_DIR
+# load_env <file>: export its KEY=VALUE lines (values never echoed).
 load_env() {
   [ -f "$1" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -54,7 +47,7 @@ load_env() {
     key=${line%%=*}; val=${line#*=}
     case $key in ''|*[!A-Za-z0-9_]*) die "$1: invalid variable name '$key'" ;; esac
     case $val in \"*\") val=${val#\"}; val=${val%\"} ;; \'*\') val=${val#\'}; val=${val%\'} ;; esac
-    eval "[ -n \"\${$key+x}\" ]" || export "$key=$val"
+    export "$key=$val"
   done < "$1"
 }
 load_env "$DIR/.env"
@@ -64,6 +57,7 @@ BASE_BRANCH=${BASE_BRANCH:-main}
 # The application the agent works on: its stack on Nevia.
 BASE_COMPUTER=${APP_COMPUTER:-hello-app}
 CLAUDE_MODEL=${CLAUDE_MODEL:-}
+CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-}
 KEY_TTL=${KEY_TTL:-30d}
 KEY_SECRET=NEVIA_AGENT_KEY
 REPO=${REPO:-}
@@ -80,7 +74,8 @@ nv() { nevia --non-interactive "$@"; }
 on_agent() {
   nv exec -e "AGENT=$AGENT" -e "AGENT_NEVIA_WORKSPACE=$NEVIA_WORKSPACE" \
     -e "REPO=$REPO" -e "BASE_BRANCH=$BASE_BRANCH" -e "BASE_COMPUTER=$BASE_COMPUTER" \
-    ${CLAUDE_MODEL:+-e "CLAUDE_MODEL=$CLAUDE_MODEL"} "$@"
+    ${CLAUDE_MODEL:+-e "CLAUDE_MODEL=$CLAUDE_MODEL"} \
+    ${CLAUDE_MAX_TURNS:+-e "CLAUDE_MAX_TURNS=$CLAUDE_MAX_TURNS"} "$@"
 }
 
 # wake: nevia exec never wakes a computer (it exits 5), so wake the agent first when it sleeps.
@@ -110,10 +105,9 @@ run_id() {
   case $1 in *[!0-9]*) die "a run id is digits only, got '$1'" ;; esac
 }
 
-# pick_repo: the repo to clone (owner/name), from --repo, else REPO from .env.
+# pick_repo: the repo to clone (owner/name), REPO from .env.
 pick_repo() {
-  [ -z "$REPO_ARG" ] || REPO=$REPO_ARG
-  [ -n "$REPO" ] || die "no GitHub repo: set REPO=owner/name in .env, or use --repo owner/name"
+  [ -n "$REPO" ] || die "no GitHub repo: set REPO=owner/name in .env"
   case $REPO in
     */*/*|/*|*/|*[!A-Za-z0-9_./-]*) ;;
     */*) return ;;
@@ -121,29 +115,77 @@ pick_repo() {
   die "not a GitHub repo: '$REPO' (expected owner/name)"
 }
 
-# The task is required: the agent evaluates and implements exactly what it is asked.
-# Given as an argument, or asked for in a terminal; without a terminal (CI, pipe), an error.
-pick_task() {
-  case $TASK in *[![:space:]]*) return ;; esac
-  [ -t 0 ] || { printf 'error: run needs a task, e.g. ./agent.sh run "add a GET /visits endpoint returning the 10 latest visits"\n\n' >&2
-                usage >&2; exit 1; }
-  printf 'Describe the task for the agent:\n'
-  while :; do
-    printf '> '
-    IFS= read -r TASK || exit 1
-    case $TASK in *[![:space:]]*) break ;; esac
+# The task of `migrate`, in its own file to be read and edited as text. Claude sees only the clone
+# (no Nevia, no git, no deploy layer), so the file spells out what the application receives.
+MIGRATION_TASK_FILE=$DIR/tasks/mongo-to-postgres.txt
+# The mongo2pg project of a migration, made beforehand by `mongo2pg infer -c` (see README.md): by
+# default migration/<repo name>/ here, one per repository, ignored by git.
+MIGRATION_DIR=${MIGRATION_DIR:-}
+
+# push_deploy: send deploy/ to the agent computer, where agent-bootstrap.sh runs it as
+# ~/agent/deploy/deploy.sh. Pushed at every run, so a change here takes effect on the next one.
+push_deploy() {
+  log "pushing the deploy layer to $AGENT"
+  # macOS bsdtar would add xattrs/AppleDouble files; GNU tar has no such flags.
+  if tar --version 2>/dev/null | grep -q bsdtar; then tflags="--no-xattrs --no-mac-metadata"; else tflags=; fi
+  # shellcheck disable=SC2086
+  COPYFILE_DISABLE=1 tar $tflags -czf - -C "$DIR" deploy | base64 |
+    nv exec "$AGENT" -- sh -c 'rm -rf ~/agent/deploy && mkdir -p ~/agent &&
+      base64 -d | tar -xzf - -C ~/agent && chmod +x ~/agent/deploy/deploy.sh' ||
+    die "could not push the deploy layer to $AGENT"
+}
+
+# push_analysis <run>: send the mongo2pg analysis in MIGRATION_DIR to the agent, as
+# ~/agent/runs/<run>.analysis, read-only. Only what Claude reads: the inferred schemas, the stats
+# and the mappings (source/collections/), the generated SQL (schema/tables/). The sample values
+# they quote are real data, so they are removed here, before anything leaves this machine; config/
+# (URIs), data/ and the HTML reports stay here too.
+push_analysis() {
+  command -v jq >/dev/null || die "jq not found: it removes the sample values from the analysis"
+  tmp=$(mktemp -d)
+  mkdir "$tmp/analysis"
+  cp -R "$MIGRATION_DIR/source/collections" "$tmp/analysis/collections"
+  [ ! -d "$MIGRATION_DIR/schema/tables" ] || cp -R "$MIGRATION_DIR/schema/tables" "$tmp/analysis/tables"
+  for f in $(find "$tmp/analysis" -name '*.json'); do
+    jq 'del(.. | .values?)' "$f" > "$f.new" && mv "$f.new" "$f" || { rm -rf "$tmp"; die "cannot read $f"; }
   done
+  # The examples of an infer warning: the lines under `examples:` more indented than it, or list items.
+  for f in $(find "$tmp/analysis" -name '*.stats.yaml'); do
+    awk '/^ *examples:/ { match($0, /^ */); ind = RLENGTH; skip = 1; next }
+         skip { match($0, /^ */); if (RLENGTH > ind || substr($0, RLENGTH + 1, 2) == "- ") next; skip = 0 }
+         { print }' "$f" > "$f.new" && mv "$f.new" "$f"
+  done
+  log "pushing the mongo2pg analysis of $MIGRATION_DIR to $AGENT (without its sample values)"
+  if tar --version 2>/dev/null | grep -q bsdtar; then tflags="--no-xattrs --no-mac-metadata"; else tflags=; fi
+  # shellcheck disable=SC2086
+  COPYFILE_DISABLE=1 tar $tflags -czf - -C "$tmp" analysis | base64 |
+    nv exec "$AGENT" -- sh -c 'd=~/agent/runs/$1.analysis && mkdir -p "$d" &&
+      base64 -d | tar -xzf - -C "$d" --strip-components=1 && chmod -R a-w "$d"' sh "$1" ||
+    { rm -rf "$tmp"; die "could not push the analysis to $AGENT"; }
+  rm -rf "$tmp"
 }
 
 # A run lasts longer than one `nevia exec` session holds, so a single exec stores the script on
 # the agent (~/agent/runs/<run>.sh) and starts it detached (.log, then .status); once done, the
 # agent goes to sleep on its own, after leaving time to read the end of the log.
-run() {
+migrate() {
+  [ -s "$MIGRATION_TASK_FILE" ] || die "no task in $MIGRATION_TASK_FILE"
   pick_repo
-  pick_task
+  MIGRATION_DIR=${MIGRATION_DIR:-$DIR/migration/${REPO##*/}}
+  [ -d "$MIGRATION_DIR/source/collections" ] ||
+    die "no mongo2pg analysis in $MIGRATION_DIR: run mongo2pg infer -c <config> first (see README.md), or set MIGRATION_DIR"
+  TASK=$(cat "$MIGRATION_TASK_FILE")
+  log "task: the MongoDB -> Postgres migration ($MIGRATION_TASK_FILE), analysis: $MIGRATION_DIR"
   wake
+  # One run at a time on the agent: pushing deploy/ and the analysis would change them under it.
+  going=$(nv exec "$AGENT" -- sh -c 'for f in ~/agent/runs/*.pid; do
+      [ -e "$f" ] && [ ! -e "${f%.pid}.status" ] && kill -0 "$(cat "$f")" 2>/dev/null && basename "$f" .pid
+    done; true')
+  [ -z "$going" ] || die "run $going is still going on $AGENT: ./agent.sh logs $going, then start again"
+  push_deploy
   RUN=$(date -u +%y%m%d%H%M%S)
   log "run $RUN: agent on $REPO ($BASE_BRANCH), base app $BASE_COMPUTER"
+  push_analysis "$RUN"
   # base64 keeps any quoting in the task intact through nevia exec
   # The script is read before going to the background: once this exec returns, stdin is gone.
   on_agent "$AGENT" -- sh -c '
@@ -193,13 +235,28 @@ follow() {
 logs() {
   wake
   set -- "${1:-$(nv exec -n "$AGENT" -- sh -c 'ls -t ~/agent/runs/*.log 2>/dev/null | head -n 1 | xargs -r basename -s .log')}"
-  [ -n "$1" ] || die "no run on $AGENT yet: ./agent.sh run"
+  [ -n "$1" ] || die "no run on $AGENT yet: ./agent.sh migrate"
   run_id "$1"
   log "run $1"
   rc=0; follow "$1" || rc=$?
   # Woken to read a finished run: back to sleep (a run still going sleeps on its own).
   remote sleep
   [ $rc -eq 0 ] || die "run $1 failed (exit $rc); its sandbox, if any: ./agent.sh cleanup $1"
+}
+
+# purge: every run and the app's stack, deleted on the agent (the agent itself stays). The deploy
+# layer is pushed first: it is the one that knows the stack's computers, databases and secrets.
+purge() {
+  if [ "${1:-}" != --yes ]; then
+    [ -t 0 ] || die "purge needs confirmation: $0 purge --yes"
+    printf 'Delete every run (sandboxes, checkpoints, logs) and %s with its databases (all data) and secrets? Type "purge": ' \
+      "$BASE_COMPUTER"
+    read -r answer
+    [ "$answer" = purge ] || die "aborted"
+  fi
+  wake
+  push_deploy
+  remote purge
 }
 
 down() {
@@ -258,7 +315,7 @@ setup() {
   if [ -z "$json" ]; then
     log "creating agent computer $AGENT (no public port)"
     nv new "$AGENT" "$@" --wait >/dev/null
-    log "now log Claude Code in once: nevia shell $AGENT, then claude and /login; then ./agent.sh run"
+    log "now log Claude Code in once: nevia shell $AGENT, then claude and /login; then ./agent.sh migrate"
   else
     log "agent computer $AGENT exists: updating its env"
     nv set "$AGENT" "$@" >/dev/null
@@ -299,12 +356,13 @@ destroy() {
 }
 
 case $CMD in
-  run)     run ;;
+  migrate) migrate ;;
   setup)   setup "${2:-}" ;;
   ls)      remote ls ;;
   logs)    logs "${2:-}" ;;
   preview) run_id "${2:-}"; remote preview "$2" ;;
   cleanup) run_id "${2:-}"; remote cleanup "$2" ;;
+  purge)   purge "${2:-}" ;;
   down)    down ;;
   destroy) destroy "${2:-}" ;;
 esac
