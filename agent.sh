@@ -5,6 +5,7 @@
 # Usage: ./agent.sh setup [--rotate]     create the agent, once
 #        ./agent.sh migrate              run the migration of REPO
 #        ./agent.sh logs [<run>]         follow a run (default: the latest)
+#        ./agent.sh stop [<run>]         stop a run (default: the one going)
 #        ./agent.sh ls                   list the sandboxes
 #        ./agent.sh preview <run>        wake a sandbox, print its URL
 #        ./agent.sh cleanup <run>        delete a sandbox
@@ -29,7 +30,7 @@ case $CMD in
       printf 'error: migrate takes no argument: set REPO in .env, edit tasks/mongo-to-postgres.txt for the task\n\n' >&2
       usage >&2; exit 1
     fi ;;
-  setup|ls|logs|preview|cleanup|purge|down|destroy) ;;
+  setup|ls|logs|stop|preview|cleanup|purge|down|destroy) ;;
   *)              printf 'error: unknown command "%s"\n\n' "$1" >&2; usage >&2; exit 1 ;;
 esac
 
@@ -194,7 +195,7 @@ migrate() {
     setsid sh -c "sh ./\$1.sh run \"\$1\" \"\$2\" > \$1.log 2>&1; echo \$? > \$1.status; sh ./\$1.sh sleep 20 > /dev/null 2>&1" \
       sh "$1" "$2" < /dev/null > /dev/null 2>&1 &' sh "$RUN" "$(printf '%s' "$TASK" | base64 | tr -d '\n')" \
     < "$DIR/agent-bootstrap.sh"
-  log "started on $AGENT (Ctrl-C stops following, not the run: ./agent.sh logs $RUN)"
+  log "started on $AGENT (Ctrl-C stops following, not the run: ./agent.sh logs $RUN, ./agent.sh stop)"
   rc=0; follow "$RUN" || rc=$?
   [ $rc -eq 0 ] || die "run $RUN failed (exit $rc); its sandbox, if any: ./agent.sh cleanup $RUN"
 }
@@ -360,6 +361,7 @@ case $CMD in
   setup)   setup "${2:-}" ;;
   ls)      remote ls ;;
   logs)    logs "${2:-}" ;;
+  stop)    [ -z "${2:-}" ] || run_id "$2"; remote stop "${2:-}" ;;
   preview) run_id "${2:-}"; remote preview "$2" ;;
   cleanup) run_id "${2:-}"; remote cleanup "$2" ;;
   purge)   purge "${2:-}" ;;

@@ -2,7 +2,8 @@
 # Runs ON the Nevia app computer, piped through `nevia exec <computer> -- sh -s`, after deploy.sh
 # has unpacked a classic Maven project (pom.xml, src) into ~/app/src. Idempotent:
 #   - installs Temurin 21 and Maven (and chisel, for MongoDB) into $HOME on first run
-#   - builds the project (mvn package) and takes the jar out of src/target
+#   - builds the project (mvn package, without the tests: they need the whole repository, which
+#     isn't pushed here, and they ran where it is, e.g. on the agent) and takes the jar out of src/target
 #   - MongoDB: (re)starts the chisel client (127.0.0.1:27017 -> MongoDB computer, see mongo/bootstrap.sh);
 #     Postgres: stops it if it still runs
 #   - (re)starts the app on :8080 and waits for it to answer on /healthz
@@ -76,7 +77,7 @@ fi
 step "2/3 building the jar"
 [ -f "$BASE/src/pom.xml" ] || die "no sources in $BASE/src (deploy.sh pushes them)"
 say "building (first build downloads dependencies)"
-(cd "$BASE/src" && "$BASE/maven/bin/mvn" -q -B package) >> "$BASE/log/build.log" 2>&1 ||
+(cd "$BASE/src" && "$BASE/maven/bin/mvn" -q -B -DskipTests package) >> "$BASE/log/build.log" 2>&1 ||
   { tail -40 "$BASE/log/build.log" >&2; die "build failed"; }
 # The runnable jar of a classic Maven build: target/<finalName>.jar, whatever the project calls
 # it. The jars Maven writes alongside it (shade's original-, sources, javadoc) are not it.

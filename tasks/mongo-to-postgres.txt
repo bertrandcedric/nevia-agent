@@ -21,7 +21,14 @@ Steps:
    them, what its API returns. Evaluate the task: is it clear and feasible for this application? If
    not, change no file and explain why.
 2. Implement the migration, in the style of the surrounding code.
-3. Validate it with `mvn -q -B package` (add or adapt tests).
+3. Validate it with `mvn -q -B package` (add or adapt tests). To try local/postgres-init (below)
+   on a real PostgreSQL 18: docker is not installed here, podman and psql are. One command per
+   call (no pipes, no `;` or `&&`), e.g.:
+     podman run -d --name pgtest -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:55432:5432 docker.io/library/postgres:18
+     pg_isready -h 127.0.0.1 -p 55432
+     psql postgresql://postgres:postgres@127.0.0.1:55432/postgres -v ON_ERROR_STOP=1 --single-transaction -f local/postgres-init/01-schema.sql
+     podman rm -f pgtest
+   Remove the containers you start once done.
 
 The migration in detail.
 

@@ -174,27 +174,25 @@ MONGODB_URI=mongodb://$MONGO_USER:{{secrets.$SECRET_MONGO_PW}}@127.0.0.1:27017/h
 
 # pg_seed: the app's seed data, if it has some (local/postgres-init/*.sql, as for its local
 # docker-compose), run by psql in the order of their names, each in one transaction, into a
-# database with no table yet: a new one. A branch, or a database already in use, is left as is.
+# database this deploy has just created (PG_NEW). A branch, or a database already in use, is left
+# as is. (Not "a database with no table": a new Nevia database already has objects in public.)
 pg_seed() {
   ls "$APP_DIR"/local/postgres-init/*.sql >/dev/null 2>&1 || return 0
+  if [ -z "$PG_NEW" ]; then log "$PG_DATABASE is not new: local/postgres-init not loaded"; return 0; fi
   command -v psql >/dev/null || die "psql not found: it loads local/postgres-init (install postgresql-client)"
   uri=$(nv pg connect "$PG_DATABASE" --uri)
   [ -n "$uri" ] || die "no URI for $PG_DATABASE"
   export PGSSLROOTCERT="$APP_DIR/nevia-pg-ca.pem"
-  tables=$(psql "$uri" -X -A -t -q -c "select count(*) from information_schema.tables where table_schema = 'public'")
-  if [ "$tables" = 0 ]; then
-    for f in "$APP_DIR"/local/postgres-init/*.sql; do
-      log "loading local/postgres-init/$(basename "$f") into $PG_DATABASE"
-      psql "$uri" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$f" >/dev/null ||
-        die "local/postgres-init/$(basename "$f") failed on $PG_DATABASE"
-    done
-  else
-    log "$PG_DATABASE already has tables: local/postgres-init not loaded"
-  fi
+  for f in "$APP_DIR"/local/postgres-init/*.sql; do
+    log "loading local/postgres-init/$(basename "$f") into $PG_DATABASE"
+    psql "$uri" -X -q -v ON_ERROR_STOP=1 --single-transaction -f "$f" >/dev/null ||
+      die "local/postgres-init/$(basename "$f") failed on $PG_DATABASE"
+  done
   unset uri PGSSLROOTCERT
 }
 
 pg_up() {
+  PG_NEW=
   json=$(status_json pg "$PG_DATABASE")
   # A sandbox branches the stack's Postgres only when the stack runs on it (STACK_DB_KIND, given by
   # the agent): a change that switches from MongoDB gets a new one, loaded with local/postgres-init.
@@ -205,6 +203,7 @@ pg_up() {
   elif [ -z "$json" ]; then
     log "creating Postgres database $PG_DATABASE"
     nv pg new "$PG_DATABASE" --wait >/dev/null
+    PG_NEW=1
   else
     state=$(json_field "$json" state)
     log "Postgres $PG_DATABASE is $state"

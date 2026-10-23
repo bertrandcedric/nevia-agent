@@ -87,6 +87,7 @@ The project is named after the repo: `migrate` reads `migration/<repo name>`. `m
 ```sh
 ./agent.sh migrate                       # runs the migration of REPO, prints the PR link
 ./agent.sh logs [<run>]                  # follows a run, Claude's steps included
+./agent.sh stop [<run>]                  # stops a run (default: the one going)
 ./agent.sh ls                            # sandboxes
 ./agent.sh preview <run>                 # wakes a PR's sandbox, prints its URL
 ./agent.sh cleanup <run>                 # deletes a sandbox
@@ -109,6 +110,6 @@ deploy/mongo/bootstrap.sh  on the MongoDB computer: MongoDB, tunnel, seed data (
 
 ## Security
 
-- Claude has neither the GitHub token nor the Nevia key, only file tools and Maven.
+- Claude has neither the GitHub token nor the Nevia key, only file tools, Maven, and podman + psql to try its SQL on a throwaway PostgreSQL.
 - It sees the structure of the data (fields, types, counts), never the values.
 - The agent's Nevia key is *editor* on the workspace: use a dedicated workspace to isolate it.

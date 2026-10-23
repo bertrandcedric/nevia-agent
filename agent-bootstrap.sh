@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs ON the agent computer, sent by agent.sh through nevia exec:
-#   sh -s ls | preview <run> | cleanup <run> | purge | sleep [<delay>]   script on stdin, from agent.sh
+#   sh -s ls | preview <run> | cleanup <run> | stop [<run>] | purge | sleep [<delay>]   script on stdin, from agent.sh
 #   sh <run>.sh run <run> <task-b64>                      stored in ~/agent/runs, detached
 # Every command but run ends by putting this computer to sleep, unless a run is going; agent.sh
 # starts `sleep` once a run is done.
@@ -31,8 +31,26 @@ BASE=$HOME/agent
 mkdir -p "$BASE/log" "$BASE/tmp" "$BASE/runs"
 
 say() { echo "[agent] $*"; }
-step() { printf '\n\033[1m[agent] ─── %s ───\033[0m\n' "$*"; }
-die() { echo "[agent] error: $*" >&2; exit 1; }
+# Timing of a run: each step shows the time since the start, and says how long the previous one
+# took; the end (or an error) says how long the whole run took.
+START=$(date +%s) STEP_START= STEP_NAME=
+dur() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+step_done() {
+  [ -n "$STEP_NAME" ] || return 0
+  say "⏱ $STEP_NAME: $(dur $(($(date +%s) - STEP_START)))"
+}
+step() {
+  step_done
+  STEP_NAME=$*; STEP_START=$(date +%s)
+  printf '\n\033[1m[agent] ─── %s ─── +%s\033[0m\n' "$*" "$(dur $((STEP_START - START)))"
+}
+# run_done: the last step's time and the run's.
+run_done() { step_done; STEP_NAME=; say "⏱ run: $(dur $(($(date +%s) - START)))"; }
+die() {
+  echo "[agent] error: $*" >&2
+  [ -z "$STEP_NAME" ] || echo "[agent] ⏱ failed during \"$STEP_NAME\" after $(dur $(($(date +%s) - START)))" >&2
+  exit 1
+}
 
 [ -n "${AGENT_NEVIA_KEY:-}" ] || die "missing env AGENT_NEVIA_KEY: ./agent.sh setup"
 for v in AGENT AGENT_NEVIA_WORKSPACE; do
@@ -183,6 +201,37 @@ case $CMD in
   cleanup)
     cleanup_run "${2:-}"
     sleep_if_idle; exit 0 ;;
+  stop)
+    # The run's processes (its shell, Claude, Maven, nevia...) are in the process group of the
+    # session agent.sh migrate started. Its leader is left alive: it then writes the run's status
+    # (143) and puts the agent to sleep, as after any run.
+    r=${2:-}
+    if [ -z "$r" ]; then
+      for f in "$BASE"/runs/*.pid; do
+        [ -e "$f" ] && [ ! -e "${f%.pid}.status" ] && kill -0 "$(cat "$f")" 2>/dev/null && r=$(basename "$f" .pid)
+      done
+      [ -n "$r" ] || { say "no run is going"; sleep_if_idle; exit 0; }
+    fi
+    case $r in *[!0-9]*) die "a run id is digits only, got '$r'" ;; esac
+    pid=$(cat "$BASE/runs/$r.pid" 2>/dev/null) || die "no run $r on $AGENT"
+    { [ ! -e "$BASE/runs/$r.status" ] && kill -0 "$pid" 2>/dev/null; } || die "run $r is not going"
+    leader=$(cut -d' ' -f5 "/proc/$pid/stat")
+    # group: the pids of the run's process group, but its leader.
+    group() {
+      for f in /proc/[0-9]*/stat; do
+        set -- $(cat "$f" 2>/dev/null) && [ "${5:-}" = "$leader" ] && [ "$1" != "$leader" ] && echo "$1"
+      done; true
+    }
+    echo "[agent] stopped by ./agent.sh stop" >> "$BASE/runs/$r.log"
+    say "stopping run $r"
+    kill -TERM $(group) 2>/dev/null || true
+    i=0; while [ -n "$(group)" ] && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+    [ -z "$(group)" ] || kill -KILL $(group) 2>/dev/null || true
+    if command -v podman >/dev/null && [ -n "$(podman ps -aq 2>/dev/null)" ]; then
+      say "removing the containers left by Claude"; podman rm -f $(podman ps -aq) >/dev/null 2>&1 || true
+    fi
+    say "run $r stopped; what it created, if anything: ./agent.sh cleanup $r"
+    exit 0 ;;
   purge)
     # Every run (its sandbox, checkpoint, files), then the app's stack: its computers, its
     # databases and their secrets. The agent itself stays. Each list is read once (Nevia
@@ -342,7 +391,7 @@ key_off
 { env -u GITHUB_TOKEN -u NEVIA_KEY_FILE -u NEVIA_WORKSPACE \
     claude -p "$PROMPT" --output-format stream-json --verbose --max-turns "${CLAUDE_MAX_TURNS:-150}" \
       --permission-mode acceptEdits --tools "Read,Edit,Write,Glob,Grep,Bash" \
-      --allowedTools "Read,Edit,Write,Glob,Grep,Bash(mvn:*)" \
+      --allowedTools "Read,Edit,Write,Glob,Grep,Bash(mvn:*),Bash(podman:*),Bash(psql:*),Bash(pg_isready:*)" \
       ${CLAUDE_MODEL:+--model "$CLAUDE_MODEL"} --add-dir "$ANALYSIS" \
       2>> "$BASE/log/claude.log" || tail -20 "$BASE/log/claude.log" >&2; } |
   tee "$BASE/tmp/stream.jsonl" |
@@ -360,6 +409,10 @@ key_off
       "[claude]   ✗ \(.content | if type == "array" then (map(.text? // "") | join(" ")) else . end | short)"
     else empty end' || true
 key_on
+# The containers Claude may have started to test its SQL (podman): none outlives its work.
+if command -v podman >/dev/null && [ -n "$(podman ps -aq 2>/dev/null)" ]; then
+  say "removing the containers left by Claude"; podman rm -f $(podman ps -aq) >/dev/null 2>&1 || true
+fi
 jq -cR 'fromjson? | select(.type == "result")' "$BASE/tmp/stream.jsonl" | tail -n 1 > "$BASE/tmp/result.json" || true
 [ -s "$BASE/tmp/result.json" ] || { tail -20 "$BASE/log/claude.log" >&2; die "Claude Code ended without a result: no PR"; }
 
@@ -396,6 +449,7 @@ done
 if [ -z "$(git status --porcelain)" ]; then
   # The reply is printed above, whatever it says.
   say "no change proposed, no sandbox, no PR"
+  run_done
   exit 0
 fi
 step "building the change (mvn package)"
@@ -477,3 +531,4 @@ url=$(curl -fsS -X POST "https://api.github.com/repos/$REPO/pulls" \
 # The sandbox stays up as the PR's live preview, until ./agent.sh cleanup.
 say "preview: $SANDBOX_URL (sandbox $SANDBOX_COMPUTER, running)"
 say "pull request: $url"
+run_done
