@@ -43,8 +43,9 @@ What is here:
 - Your working directory, {{WORK}}: put your scripts and REPORT.md here. It already holds, ready to
   run (the node packages are installed: no npm install):
     known-issues.md   the mongo2pg issues earlier runs found: how to see each one, how to fix it
-    known-mappings.mjs  the mechanical mapping fixes of the known issues (VARCHAR(n), UUID ids),
-                      in every mapping at once: `node known-mappings.mjs`
+    known-mappings.mjs  the mapping fixes of the known issues: VARCHAR(n) and UUID ids in every
+                      mapping (`node known-mappings.mjs`), and a subtree as one JSONB column with
+                      its tables deleted (`--jsonb <collection>:<path>`, as known-issues.md says)
     known-fixes.sql   the post-import fixes of the known issues that no mapping can avoid
     verify.mjs        the verification (step 3)
     unmapped.mjs      the source fields that no mapping covers, with their types
@@ -101,9 +102,13 @@ Steps:
    - for each collection, countDocuments in MongoDB equals the rows of its table;
    - for each child table, its rows equal the number of elements (or sub-objects) mongo2pg maps
      to it, counted in MongoDB with an aggregation;
-   - for each collection, up to 50 documents taken at random ($sample), every mapped field
-     compared with its row(s): strings exactly, numbers, booleans, dates to the millisecond,
-     a missing field as NULL, JSONB as the same JSON;
+   - for each collection, up to 50 documents taken at random ($sample), and 3 more among those
+     that have the path of each child table, every mapped field compared with its row(s):
+     strings exactly, numbers, booleans, dates to the millisecond, a missing field as NULL, JSONB
+     as the same JSON;
+   - every field of every document that holds data (not null, [] or {}) is covered by a mapping:
+     a column, a child table, or a JSONB column above it. A table you delete must not take data
+     with it;
    - no VARCHAR(n) sized from the sample left in the mappings (they load today, and fail on the
      next longer value);
    - primary keys unique, no orphan row for any foreign key;

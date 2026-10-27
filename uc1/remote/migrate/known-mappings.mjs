@@ -67,10 +67,16 @@ for (const spec of JSONB) {
   if (!new RegExp(`^  - source_field: ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(parent.text)) {
     const col = `  - source_field: ${name}\n    target_field: ${target}\n    data_type: jsonb\n    nullable: true\n`;
     const ddl = `    - name: ${target}\n      sql_type: JSONB\n      nullable: true\n      primary_key: false\n`;
-    if (!/^  ddl:\n/m.test(parent.text) || !/^    foreign_keys:/m.test(parent.text)) {
-      console.error(`--jsonb ${spec}: ${path.relative(base, parent.f)} has no "  ddl:" or "    foreign_keys:" line`); process.exit(1);
-    }
-    write(parent.f, parent.text.replace(/^  ddl:\n/m, col + '  ddl:\n').replace(/^    foreign_keys:/m, ddl + '    foreign_keys:'));
+    // mongo2pg writes an empty list inline (`columns: []`, run 261027123409): it becomes a block
+    // list with the column; otherwise the column goes at the end of the list.
+    let text = parent.text;
+    if (/^  columns: \[\]\s*$/m.test(text)) text = text.replace(/^  columns: \[\]\s*$/m, '  columns:\n' + col.trimEnd());
+    else if (/^  ddl:\n/m.test(text)) text = text.replace(/^  ddl:\n/m, col + '  ddl:\n');
+    else { console.error(`--jsonb ${spec}: ${path.relative(base, parent.f)} has no "  columns:" list before "  ddl:"`); process.exit(1); }
+    if (/^    columns: \[\]\s*$/m.test(text)) text = text.replace(/^    columns: \[\]\s*$/m, '    columns:\n' + ddl.trimEnd());
+    else if (/^    foreign_keys:/m.test(text)) text = text.replace(/^    foreign_keys:/m, ddl + '    foreign_keys:');
+    else { console.error(`--jsonb ${spec}: ${path.relative(base, parent.f)} has no "    columns:" list before "    foreign_keys:"`); process.exit(1); }
+    write(parent.f, text);
     added = true;
   }
   console.log(`jsonb ${coll}:${sub}: ${gone.length} mapping(s) deleted (${gone.map((x) => tableName(x.text)).join(', ') || 'none'}), ` +

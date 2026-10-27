@@ -11,7 +11,8 @@ other, with `"known": true` and `"first_seen": "known"`, so that the list of all
 ones mongo2pg still has. One that no longer shows is not recorded: say it in the report (section 4).
 
 Found with mongo2pg 0.8.0 (`mongo2pg-v0.8.0`), Rocket.Chat 8.7 source, run 261027081842 (and
-`varchar-sized-from-sample` in the review of run 261027095359: both runs had missed it).
+`varchar-sized-from-sample` in the review of run 261027095359: both runs had missed it;
+`nested-shortcode-hoisted-to-parent` in run 261027110820).
 
 | Id | Kind | Command | Fix | Seen in |
 | --- | --- | --- | --- | --- |
@@ -22,11 +23,12 @@ Found with mongo2pg 0.8.0 (`mongo2pg-v0.8.0`), Rocket.Chat 8.7 source, run 26102
 | [array-of-objects-as-array-scalar](#array-of-objects-as-array-scalar) | inference | infer | mapping | any project |
 | [objectid-rendered-as-uuid](#objectid-rendered-as-uuid) | bug | export | `known-fixes.sql` | any project |
 | [binary-exported-as-decimal-array](#binary-exported-as-decimal-array) | bug | export | `known-fixes.sql` | BYTEA columns |
-| [videoconf-settings-subtree-misrooted](#videoconf-settings-subtree-misrooted) | inference | infer | mapping | rocketchat_statistics |
+| [videoconf-settings-subtree-misrooted](#videoconf-settings-subtree-misrooted) | inference | infer | `known-mappings.mjs --jsonb` | rocketchat_statistics |
 | [colliding-child-table-dropped](#colliding-child-table-dropped) | bug | infer | mapping | sibling sub-objects of the same shape |
 | [unmapped-fields-dropped-silently](#unmapped-fields-dropped-silently) | inference | infer | mapping | any project |
 | [ttl-collections-not-flagged](#ttl-collections-not-flagged) | feature | infer | none (the lab freezes the source) | collections with a TTL index |
 | [varchar-sized-from-sample](#varchar-sized-from-sample) | inference | infer | `known-mappings.mjs` | any project |
+| [nested-shortcode-hoisted-to-parent](#nested-shortcode-hoisted-to-parent) | bug | export | `known-mappings.mjs --jsonb` | nested arrays of objects (Rocket.Chat's `md`) |
 
 The mechanical mapping fixes are in `known-mappings.mjs` (`node known-mappings.mjs`, then to-pg
 and export); the post-import fixes are in `known-fixes.sql`: run it after each import, on the same database
@@ -148,8 +150,14 @@ prints how many values each fix changed.
 - **See it:** `grep -H 'mongo_path' <project>/source/collections/rocketchat_statistics/mapping_*.yaml`,
   against `srcmongo --eval 'const s = db.rocketchat_statistics.findOne(); print(Object.keys(s.videoConf.settings), Object.keys(s.settings))'`.
   More generally: a child table whose `mongo_path` matches no document.
-- **Fix:** delete the mappings at that path and their CSVs; map the real `.settings` as one JSONB
-  column `settings` of `rocketchat_statistics`; then to-pg and export.
+- **Careful:** `.videoConf.settings` itself **does exist** (`{provider, dms, channels, groups, teams}`,
+  table `videoconf_settings`): only the 12 tables *below* it are wrong. Run 261027110820 deleted
+  `videoconf_settings` too, and lost `videoConf.settings.provider` without any check failing.
+- **Fix:** both subtrees as JSONB, in one command:
+  `node known-mappings.mjs --jsonb rocketchat_statistics:.videoConf.settings --jsonb rocketchat_statistics:.settings`.
+  The first deletes `videoconf_settings` and the 12 tables below it (with their CSVs) and gives
+  `videoconf` a JSONB column `settings` that keeps all of it; the second gives
+  `rocketchat_statistics` a JSONB column `settings` for the real subtree. Then to-pg and export.
 - **Suggestion for mongo2pg:** child paths from the paths actually walked; report a table whose path
   matches no document.
 
@@ -183,7 +191,10 @@ prints how many values each fix changed.
 - **Fix:** one column per field with data, on the table of its parent: JSONB for an object or an
   array, `TEXT` for an id, `TIMESTAMPTZ` for a date (`pg_mapping.columns` and
   `pg_mapping.ddl.columns`); then to-pg and export. Leave the always-null and always-empty ones,
-  and list them in the issue.
+  and list them in the issue. A subtree is simplest as JSONB:
+  `node known-mappings.mjs --jsonb <collection>:<path>`. By hand, mind the mappings whose list is
+  written `columns: []`: it becomes `columns:` with the item below it, or to-pg fails (`did not
+  find expected key`).
 - **Suggestion for mongo2pg:** list per collection the fields seen but not mapped, and why.
 
 ## ttl-collections-not-flagged
@@ -219,3 +230,26 @@ prints how many values each fix changed.
   of the report: one row for all.
 - **Suggestion for mongo2pg:** `TEXT` for strings by default; a `VARCHAR(n)` only on request, and
   then from a limit of the data model, never from the longest value of a sample.
+
+## nested-shortcode-hoisted-to-parent
+
+- **Kind, command:** bug, `export`
+- **Observed:** in an array of objects nested in another one, export writes a field of a child
+  element on the row of its parent element. Rocket.Chat's parsed messages (`md`): the `shortCode`
+  of an EMOJI inside a BOLD element (`md[].value[].value[].shortCode`) lands on the row of the BOLD
+  element in table `value` (and `md_value` for `rocketchat_room.lastMessage.md`), whose own element
+  has none: 7 rows in run 261027110820 (e.g. `eyes` on message `9KThx9QCwvbFX4ABN`).
+- **Expected:** a row's columns from its own element only; `shortcode` NULL on the BOLD row.
+- **See it:** only in the documents that have such nesting, so a random sample may miss it (try1
+  of run 261027110820 passed, main failed):
+  `srcmongo --eval 'print(db.rocketchat_message.countDocuments({"md.value.value.shortCode": {$exists: true}}))'`;
+  `verify.mjs` also samples the documents of each child table's path, which finds it.
+- **Fix:** the whole `md` tree as JSONB, for the messages and for the rooms' last message:
+  `node known-mappings.mjs --jsonb rocketchat_message:.md --jsonb rocketchat_room:.lastMessage.md`.
+  It deletes the tables `md`, `value`, `lastmessage_md`, `md_value` (and their CSVs) and adds a
+  JSONB column `md` to `rocketchat_message` and to `lastmessage`; then to-pg and export. `md` is a
+  parse tree of the message, read as a whole: as JSON it is exact, as tables it was 4 tables and
+  this bug. (Run 261027110820 cleared the wrong `shortcode` values with SQL after the import
+  instead: an heuristic on `md`'s format, not kept.)
+- **Suggestion for mongo2pg:** resolve a column's source field at the element's own level only,
+  never from its descendants.

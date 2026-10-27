@@ -2,7 +2,7 @@
 // Verification of the {{MONGO_DB}} MongoDB -> PostgreSQL migration (from migrate/verify.mjs,
 // copied into the work directory at each run: fix it here if it is wrong, and say so).
 //
-//   node verify.mjs <branch | main> [--project DIR] [--samples N]
+//   node verify.mjs <branch | main> [--project DIR] [--samples N] [--per-path N]
 //
 // <branch> is a branch of the database (e.g. try3), main the main database: the URI comes from
 // `nvpg uri`, never from the command line, so no password reaches a log. Reads the project's
@@ -30,9 +30,10 @@ const TARGET = args.find((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1]
 const PROJECT = opt('project', '{{PROJECT}}');
 const SCHEMA = '{{SCHEMA}}';
 const SAMPLES = Number(opt('samples', '50'));
+const PER_PATH = Number(opt('per-path', '3'));
 
 if (!TARGET || !/^(main|[a-z0-9-]+)$/.test(TARGET)) {
-  console.error('usage: node verify.mjs <branch | main> [--project DIR] [--samples N]');
+  console.error('usage: node verify.mjs <branch | main> [--project DIR] [--samples N] [--per-path N]');
   process.exit(2);
 }
 const pgUri = execFileSync('nvpg', TARGET === 'main' ? ['uri'] : ['uri', TARGET], { encoding: 'utf8' }).trim();
@@ -180,6 +181,52 @@ function resolveNodes(rootDoc, segments, mode) {
     }
   }
   return nodes;
+}
+
+// Coverage (as unmapped.mjs): the source paths the mappings cover, as leaves (a column),
+// containers (a child table and its ancestors, walked into) and JSONB columns (all below them).
+const norm = (p) => (p || '.').replace(/^\./, '');
+function coverage(tables) {
+  const leaves = new Set();
+  const containers = new Set();
+  const jsonb = new Set();
+  for (const t of tables) {
+    const b = norm(t.mongoPath);
+    if (t.mode !== 'root') {
+      containers.add(b);
+      const parts = b.split('.');
+      for (let i = 1; i < parts.length; i++) containers.add(parts.slice(0, i).join('.'));
+    }
+    for (const col of t.columns) {
+      const p = b ? b + '.' + col.source_field : col.source_field;
+      leaves.add(p);
+      if (String(col.data_type).toLowerCase().startsWith('json')) jsonb.add(p);
+      if (t.keyColumn && col.source_field === t.keyColumn) leaves.add(b);
+    }
+  }
+  return { leaves, containers, jsonb };
+}
+function covered(p, cov) {
+  if (cov.leaves.has(p) || cov.containers.has(p)) return true;
+  for (const j of cov.jsonb) if (p === j || p.startsWith(j + '.')) return true;
+  return false;
+}
+// A value that holds nothing: dropping it loses no data.
+const isEmpty = (v) => v === null || v === undefined || (Array.isArray(v) && v.length === 0)
+  || (isPlainObject(v) && Object.keys(v).length === 0);
+// uncoveredIn <doc>: the paths of the document that hold data and that no mapping covers.
+function uncoveredIn(doc, prefix, cov, found) {
+  for (const k of Object.keys(doc)) {
+    const p = prefix ? prefix + '.' + k : k;
+    const v = doc[k];
+    if (!covered(p, cov)) {
+      if (!isEmpty(v)) found.set(p, (found.get(p) || 0) + 1);
+      continue;
+    }
+    if (cov.containers.has(p)) {
+      for (const node of (Array.isArray(v) ? v : [v])) if (isPlainObject(node)) uncoveredIn(node, p, cov, found);
+    }
+  }
 }
 
 // Aggregation that counts the elements mongo2pg maps to a child table.
@@ -437,9 +484,21 @@ async function main() {
   }
 
   // 3. sampled documents ---------------------------------------------------
+  // SAMPLES documents at random, and PER_PATH more among those that have the path of each child
+  // table: a bug of a nested structure that few documents have is not left to chance.
   for (const c of collections) {
-    const sample = await db.collection(c.collection)
-      .aggregate([{ $sample: { size: SAMPLES } }], { allowDiskUse: true }).toArray();
+    const coll = db.collection(c.collection);
+    const sample = await coll.aggregate([{ $sample: { size: SAMPLES } }], { allowDiskUse: true }).toArray();
+    const seen = new Set(sample.map((d) => String(d._id)));
+    for (const t of c.tables) {
+      const segs = segmentsOf(t.mongoPath);
+      if (t.mode === 'root' || segs.length === 0) continue;
+      try {
+        const more = await coll.aggregate([{ $match: { [segs.join('.')]: { $exists: true } } },
+          { $sample: { size: PER_PATH } }], { allowDiskUse: true }).toArray();
+        for (const d of more) if (!seen.has(String(d._id))) { seen.add(String(d._id)); sample.push(d); }
+      } catch { /* a path MongoDB cannot match (e.g. a $ in a key): the random sample only */ }
+    }
     const rootIdCol = (c.root.columns.find((x) => x.source_field === '_id') || {}).target_field;
     const pkCols = c.root.ddl.columns.filter((x) => x.primary_key).map((x) => x.name);
     const idCol = rootIdCol || (pkCols.length === 1 ? pkCols[0] : null);
@@ -517,6 +576,18 @@ async function main() {
     }
     record('samples', `${c.collection} (${sample.length} docs)`, bad === 0,
       bad === 0 ? 'all mapped fields match' : `${bad} mismatch(es): ` + details.slice(0, 4).join(' | '));
+  }
+
+  // 3a. coverage: every field that holds data is mapped (known issue unmapped-fields-dropped-silently,
+  // and a table deleted with data in it). Every document is read: a rare field is a field too.
+  for (const c of collections) {
+    const cov = coverage(c.tables);
+    const found = new Map();
+    for await (const doc of db.collection(c.collection).find({})) uncoveredIn(doc, '', cov, found);
+    const list = [...found.entries()].sort().map(([p, n]) => `${p} (${n})`);
+    record('coverage', c.collection, list.length === 0,
+      list.length === 0 ? 'every field with data is mapped'
+        : `${list.length} field(s) with data and no mapping: ` + list.slice(0, 6).join(', ') + (list.length > 6 ? ', ...' : ''));
   }
 
   // 3b. no VARCHAR(n) sized from the sample (known issue varchar-sized-from-sample) ------

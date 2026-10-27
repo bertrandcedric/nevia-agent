@@ -21,14 +21,21 @@ Steps:
    them, what its API returns. Evaluate the task: is it clear and feasible for this application? If
    not, change no file and explain why.
 2. Implement the migration, in the style of the surrounding code.
-3. Validate it with `mvn -q -B package` (add or adapt tests). To try local/postgres-init (below)
-   on a real PostgreSQL 18: docker is not installed here, podman and psql are. One command per
-   call (no pipes, no `;` or `&&`), e.g.:
-     podman run -d --name pgtest -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:55432:5432 docker.io/library/postgres:18
-     pg_isready -h 127.0.0.1 -p 55432
-     psql postgresql://postgres:postgres@127.0.0.1:55432/postgres -v ON_ERROR_STOP=1 --single-transaction -f local/postgres-init/01-schema.sql
-     podman rm -f pgtest
-   Remove the containers you start once done.
+3. Validate it with `mvn -q -B package` (add or adapt tests), then once against a real database:
+   an empty PostgreSQL 18 on Nevia is yours for this work, deleted after you. Its connection is in
+   your environment only: DATABASE_URL and PG_CA_FILE, what the application receives on Nevia (so
+   `java -jar target/<jar>` runs against it, as it will on the sandbox), and PGHOST, PGPORT,
+   PGUSER, PGPASSWORD, PGDATABASE, PGSSLMODE, PGSSLROOTCERT, so psql needs no arguments, e.g.
+   `psql -v ON_ERROR_STOP=1 --single-transaction -f local/postgres-init/01-schema.sql`.
+   Never print these variables, or write them into a file or a command line. Drop and recreate its
+   tables as you need. One end-to-end check is enough: load local/postgres-init, start the
+   application against it, call its API with curl, stop it. Start it with the Bash tool in the
+   background (run_in_background), as plain `java -jar target/<jar>`: no variable before the
+   command, no `&`, no `sh -c`. It listens on 8080, which nothing else uses here; do not change
+   the port or application.properties for the check. Stop it with KillShell (or `pkill -f <jar>`)
+   before starting it again. The variables above are set: do not check them. Do not compare
+   schemas by hand or rerun the build again and again: after you, the pipeline validates the
+   change on a sandbox of its own.
 
 The migration in detail.
 

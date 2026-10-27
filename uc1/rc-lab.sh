@@ -1,7 +1,8 @@
 #!/bin/sh
 # A MongoDB database migrated to a Nevia Postgres by Claude Code with mongo2pg, on branches of the
 # database, from a Nevia computer. The source is any MongoDB the computer reaches (MONGO_URI,
-# MONGO_DB), or one that sources/<SOURCE>/ sets up there. Config: .env only (see .env.example).
+# MONGO_DB), or one that sources/<SOURCE>/ sets up there. Config: ../.env only (UC1_ lines
+# first, see ../.env.example).
 #
 # Usage: ./rc-lab.sh all                 the 4 steps: setup, seed (with a SOURCE), analyse, migrate
 #        ./rc-lab.sh setup               1. the computer, its Nevia key, the Postgres database
@@ -13,11 +14,14 @@
 #        ./rc-lab.sh logs [<run>]        follow a run (default: the latest)
 #        ./rc-lab.sh stop                stop every run going (their branches stay)
 #        ./rc-lab.sh status              computer, containers, database and branches
-#        ./rc-lab.sh sleep               put the computer to sleep (migrate does it at its end)
+#        ./rc-lab.sh sleep               put the computer to sleep, unless a run of any use case is
+#                                        going (migrate does it at its end)
 #        ./rc-lab.sh destroy [--results] [--yes]
-#                                        delete everything on Nevia: the computer (and the source,
-#                                        its data, ~/m2p), the database and its branches, the
-#                                        secrets, the Nevia principal; --results: results/ too
+#                                        delete what is uc1's on Nevia: on the computer ~/m2p and
+#                                        the source (Rocket.Chat, its MongoDB and data), the
+#                                        database and its branches; --results: results/ too. The
+#                                        computer is shared with uc2 and uc3: ../computer.sh
+#                                        destroy deletes it
 set -eu
 DIR=$(cd "$(dirname "$0")" && pwd)
 . "$DIR/lib.sh"
@@ -34,19 +38,20 @@ esac
 case $CMD in status|logs) ;; *) trap 'rc=$?; done_ "./rc-lab.sh $CMD"; exit $rc' EXIT ;; esac
 
 # .env alone decides: the shell's values are dropped first.
-unset NEVIA_WORKSPACE LAB PG_NAME KEY_TTL SLEEP_AT_END ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_MODEL CLAUDE_MAX_TURNS CLAUDE_BASH_MAX_OUTPUT \
+unset NEVIA_WORKSPACE AGENT AGENT_KEY_TTL LAB PG_NAME KEY_TTL SLEEP_AT_END ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_MODEL CLAUDE_MAX_TURNS CLAUDE_BASH_MAX_OUTPUT \
+  ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL \
   SOURCE MONGO_URI MONGO_DB LAB_HTTPS_PORT SEED_USERS SEED_CHANNELS SEED_GROUPS SEED_DMS SEED_MESSAGES SEED
-load_env "$DIR/.env"
+load_env "$DIR/../.env" UC1
 # The source: rocketchat unless .env says otherwise (empty: an existing MongoDB, nothing to set up).
 SOURCE=${SOURCE-rocketchat}
 if [ -n "$SOURCE" ]; then
   [ -f "$DIR/sources/$SOURCE/source.sh" ] || die "no sources/$SOURCE/source.sh: SOURCE in .env"
   load_env "$DIR/sources/$SOURCE/source.env"
 fi
-LAB=${LAB:-rc-lab}
+# The computer, its Nevia key and the runs going on it: shared with uc2 and uc3 (AGENT).
+. "$DIR/../common/computer.sh"
+LAB=$AGENT
 PG_NAME=${PG_NAME:-rc-pg}
-KEY_TTL=${KEY_TTL:-7d}
-KEY_SECRET=RC_LAB_NEVIA_KEY
 SLEEP_AT_END=${SLEEP_AT_END:-yes}
 for c in nevia jq; do command -v $c >/dev/null || die "$c not found"; done
 [ -n "${NEVIA_WORKSPACE:-}" ] || die "set NEVIA_WORKSPACE in .env"
@@ -96,7 +101,8 @@ push_scripts() {
 # lab_env: the -e flags of every remote script, from .env (and the source's defaults).
 lab_env() {
   set -- -e "LAB_NEVIA_WORKSPACE=$NEVIA_WORKSPACE" -e "PG_NAME=$PG_NAME" -e "LAB_MONGO_URI=$MONGO_URI" -e "MONGO_DB=$MONGO_DB"
-  for v in CLAUDE_MODEL CLAUDE_MAX_TURNS CLAUDE_BASH_MAX_OUTPUT SEED_USERS SEED_CHANNELS SEED_GROUPS SEED_DMS SEED_MESSAGES SEED; do
+  # Claude's gateway and its models (not its token: a secret, set by setup) go with each command.
+  for v in CLAUDE_MODEL CLAUDE_MAX_TURNS CLAUDE_BASH_MAX_OUTPUT ANTHROPIC_BASE_URL ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL SEED_USERS SEED_CHANNELS SEED_GROUPS SEED_DMS SEED_MESSAGES SEED; do
     eval "val=\${$v:-}"; [ -z "$val" ] || set -- "$@" -e "$v=$val"
   done
   printf '%s\n' "$@"
@@ -130,45 +136,17 @@ confirm() {
   printf '%s Type "%s": ' "$3" "$1"; read -r answer; [ "$answer" = "$1" ] || die "aborted"
 }
 
-has_secret() { nv --json secrets ls | jq -e --arg n "$1" 'any(.secrets[]; .name == $n)' >/dev/null; }
-principal_id() { nv --json access ls | jq -r --arg n "$LAB" 'first(.access[] | select(.principal.name == $n) | .principal.id) // empty'; }
-
-# setup: a Nevia key for the computer (editor, for nvpg), the computer (its HTTPS URL on the
-# source's LAB_HTTPS_PORT, if any), the Postgres database. Run it again to renew the key.
+# setup: the computer shared with uc2 and uc3, with its Nevia key (made only if there is none:
+# agent/common/computer.sh) and the source's port (LAB_HTTPS_PORT, if any) published on 443, then
+# the Postgres database.
 setup() {
-  principal=$(principal_id)
-  if [ -z "$principal" ]; then
-    say "creating Nevia principal $LAB (editor, key valid $KEY_TTL)"
-    key=$(nv --yes access add --private-key --role editor --name "$LAB" --description "Claude's branches of $PG_NAME" --expires-in "$KEY_TTL" --out -)
-  else
-    say "renewing the key of $LAB (valid $KEY_TTL)"
-    key=$(nv --yes access keys rotate "$principal" --expires-in "$KEY_TTL" --out -)
-  fi
-  [ -n "$key" ] || die "no key returned for $LAB"
-  printf '%s\n' "$key" | nv --yes secrets "$KEY_SECRET" --file - >/dev/null
-  unset key
-  set -- -e "LAB_NEVIA_KEY={{secrets.$KEY_SECRET}}"
-  # Claude Code's credential, if .env has one: a workspace secret in the computer's env.
-  for v in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN; do
-    eval "val=\${$v:-}"
-    [ -n "$val" ] || continue
-    printf '%s' "$val" | nv --yes secrets "$v" --file - >/dev/null
-    set -- "$@" -e "$v={{secrets.$v}}"
-  done
-  unset val
-  [ -z "${LAB_HTTPS_PORT:-}" ] || set -- "$@" -p "443:$LAB_HTTPS_PORT"
-  if [ -z "$(status_json "$LAB")" ]; then
-    say "creating computer $LAB${LAB_HTTPS_PORT:+ (port $LAB_HTTPS_PORT published on 443)}"
-    nv new "$LAB" "$@" --wait >/dev/null
-  else
-    nv set "$LAB" "$@" >/dev/null
-  fi
+  set --
+  [ -z "${LAB_HTTPS_PORT:-}" ] || { say "port $LAB_HTTPS_PORT of $LAB published on 443"; set -- -p "443:$LAB_HTTPS_PORT"; }
+  agent_setup "$@"
   if [ -z "$(status_json pg "$PG_NAME")" ]; then
     say "creating Postgres database $PG_NAME"
     nv pg new "$PG_NAME" --wait >/dev/null
   fi
-  [ -n "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] ||
-    say "log Claude Code in once, if not done: nevia shell $LAB, then claude and /login"
   say "ready: $LAB ($(json_field "$(status_json "$LAB")" url)), database $PG_NAME"
 }
 
@@ -430,21 +408,11 @@ build_report() {
   } > "$out/REPORT.md"
 }
 
-# sleep_lab: the computer to sleep (compute released; storage, URL and the source's data kept).
-# The next command wakes it.
-sleep_lab() {
-  case $(json_field "$(status_json "$LAB")" state) in
-    '') say "no computer $LAB" ;;
-    sleeping|suspended) say "$LAB is already asleep" ;;
-    *) say "putting $LAB to sleep"; nv suspend "$LAB" --wait >/dev/null && say "$LAB is asleep" ;;
-  esac
-}
-# at_end: after a run, the computer to sleep unless SLEEP_AT_END=no; never under a run going.
+# at_end: after a run, the computer to sleep unless SLEEP_AT_END=no; never under a run going,
+# of any use case (agent_sleep).
 at_end() {
   [ "$SLEEP_AT_END" != no ] || return 0
-  going=$(going_runs 2>/dev/null)
-  [ -z "${going% }" ] || { say "run(s) ${going% } still going: $LAB stays awake"; return 0; }
-  sleep_lab
+  agent_sleep
 }
 
 migrate() {
@@ -513,39 +481,44 @@ status() {
   nv pg ls | awk -v p="$PG_NAME" 'NR == 1 || $2 == p || index($2, p "-") == 1'
 }
 
-# destroy [--results] [--yes]: what exists, listed, then deleted after a confirmation: on Nevia the
-# computer (with the source and its data, the tools, ~/m2p), the database and its branches, the
-# secrets, the Nevia principal and its key; with --results, results/ here too.
+# destroy [--results] [--yes]: what is uc1's, listed, then deleted after a confirmation: on the
+# computer ~/m2p and the source (Rocket.Chat and its MongoDB: containers, volume, ~/rocketchat),
+# the database and its branches; with --results, results/ here too. The computer, its key and
+# Claude Code's secrets are shared with uc2 and uc3: ../computer.sh destroy deletes them.
 destroy() {
   results=no yes=
   for a in "$@"; do
     case $a in --results) results=yes ;; --yes) yes=--yes ;; *) die "destroy: unknown option $a" ;; esac
   done
   computer=$(status_json "$LAB")
+  if [ -n "$computer" ]; then
+    wake
+    going=$(going_runs); [ -z "${going% }" ] || die "run(s) ${going% } going: ./rc-lab.sh stop first"
+  fi
   dbs=$(nv --json pg ls | jq -r --arg p "$PG_NAME" '[.. | objects | select(has("name")) | .name | select(. == $p or startswith($p + "-"))] | unique | sort_by(length)[]')
-  secrets=; for s in "$KEY_SECRET" ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN; do ! has_secret "$s" || secrets="$secrets $s"; done
-  principal=$(principal_id)
-  [ -n "$computer$dbs$secrets$principal" ] || [ "$results" = yes ] || { say "nothing to delete in workspace $NEVIA_WORKSPACE"; return 0; }
+  [ -n "$computer$dbs" ] || [ "$results" = yes ] || { say "nothing to delete in workspace $NEVIA_WORKSPACE"; return 0; }
   echo "In Nevia workspace $NEVIA_WORKSPACE, this deletes:"
-  [ -z "$computer" ] || echo "  - computer $LAB ($(json_field "$computer" url)): the source and its data (MongoDB, Rocket.Chat), the tools, ~/m2p"
+  [ -z "$computer" ] || echo "  - on computer $LAB: ~/m2p (the tools, the runs) and the source (Rocket.Chat, its MongoDB and data)"
   for d in $dbs; do echo "  - database $d"; done
-  for s in $secrets; do echo "  - secret $s"; done
-  [ -z "$principal" ] || echo "  - Nevia principal $LAB and its key"
+  echo "Kept: computer $LAB, its Nevia key and Claude Code's secrets, shared with uc2 and uc3 (../computer.sh destroy)"
   if [ "$results" = yes ]; then echo "On this machine: results/ (every run's report, the mongo2pg issues)"
   else echo "Kept: results/ on this machine (destroy --results deletes it too)"; fi
   confirm destroy "$yes" "This cannot be undone."
-  [ -z "$computer" ] || { say "deleting computer $LAB"; nv --yes rm "$LAB" --wait >/dev/null; }
+  if [ -n "$computer" ]; then
+    say "deleting ~/m2p and the source on $LAB"
+    nv exec -n "$LAB" -- sh -c 'if command -v podman >/dev/null; then
+        podman rm -f rc-app rc-mongo >/dev/null 2>&1 || true; podman volume rm -f rc-mongo-data >/dev/null 2>&1 || true
+      fi; rm -rf ~/m2p ~/rocketchat'
+  fi
   # The branches first, then their parent.
   for d in $(printf '%s\n' $dbs | sort -r); do say "deleting database $d"; nv --yes pg rm "$d" --wait >/dev/null; done
-  for s in $secrets; do say "deleting secret $s"; nv --yes secrets unset "$s" >/dev/null; done
-  [ -z "$principal" ] || { say "deleting Nevia principal $LAB"; nv --yes access rm "$principal" >/dev/null; }
   [ "$results" = no ] || { say "deleting results/"; rm -rf "$DIR/results"; }
   say "deleted; ./rc-lab.sh setup starts again"
 }
 
 case $CMD in
   all)     setup; if [ -n "$SOURCE" ]; then remote source up; lab source seed; lab analyse; else remote analyse; fi; migrate ;;
-  sleep)   sleep_lab ;;
+  sleep)   agent_sleep ;;
   setup)   setup ;;
   up|seed) [ -n "$SOURCE" ] || die "$CMD: no SOURCE in .env (an existing MongoDB has nothing to set up)"
            remote source up; [ "$CMD" = up ] || lab source seed ;;

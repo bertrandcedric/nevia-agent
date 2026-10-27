@@ -1,0 +1,119 @@
+Your task: migrate the MongoDB database {{MONGO_DB}} to the Nevia PostgreSQL 18 database {{PG_NAME}},
+schema {{SCHEMA}}: all of its data, complete and correct, proved by checks against the source,
+in the tables and columns mongo2pg's analysis proposes.
+
+What you have:
+- srcmongo: mongosh on {{MONGO_DB}}, read only (e.g. srcmongo --eval 'db.getCollectionNames()').
+- mongo2pg and its project for this database, made by the analyse step: {{PROJECT}}. Read
+  {{PROJECT}}/context/CONTEXT.md first and whole: the collections, the tables mongo2pg proposes,
+  its infer warnings, how to edit and regenerate, and the help of its commands at the end. It
+  is all you need before the first attempt. context/docs/ is the mongo2pg documentation: grep it
+  for one thing at a time, never read it whole.
+- nvpg, your only access to Nevia (a branch is named try<N>, the main database has no name):
+    nvpg branch               a new branch try<N> of the main database, its schema empty; prints
+                              the mongo2pg import command that loads it (its config's path in
+                              it): run it next
+    nvpg import main          mongo2pg import of the project into the main database, once a
+                              branch has passed node verify.mjs: the only way to load it
+    nvpg state                each target: imported, failed (read only) or passed
+    nvpg psql [try<N>] ARG…   psql on a branch, or on the main database without a name (read
+                              only until nvpg import main: every attempt is on a branch)
+    nvpg uri [try<N>]         its URI, for a script only (e.g. subprocess in python): never print it;
+                              the main database's only after nvpg import main
+                              (TLS required: node's pg takes ssl: { rejectUnauthorized: false })
+    nvpg config               the config of the main database; nvpg ls: the database and branches
+- psql, node (packages pg, mongodb and yaml installed), python3. {{WORK}} is your directory.
+- Generic tools in {{WORK}}, ready to run: they know mongo2pg and its project, not this data. Each
+  prints a short summary and says its options in its first lines. Use them as they are; fix one
+  only if it is wrong (and say so in the report).
+    node fix-mappings.mjs     the mapping fixes of mongo2pg issues met before, in every mapping,
+                              from the profile of every document (it runs profile.mjs first):
+                              VARCHAR(n) sized from the sample to TEXT, ObjectId ids typed as UUID
+                              to TEXT, NOT NULL dropped where a document lacks the field, a column
+                              whose scalar values mix types to TEXT (TEXT[] for a list). It keeps
+                              every table and column, and reports the child tables whose list
+                              mixes objects and scalars. Prints what it changed.
+    node precheck.mjs         every value of the exported CSV against its column's type and
+                              nullability: all that PostgreSQL would refuse, at once (the import
+                              stops at the first). Run it after each regeneration, before nvpg
+                              branch; exits non-zero on a problem.
+    fix-data.sql              the data fixes no mapping can do (ids exported as UUID text, binaries
+                              as decimal arrays): nvpg psql try<N> -f {{WORK}}/fix-data.sql, after
+                              each import. Prints how many values it changed.
+    node profile.mjs          the shape of the source from every document: per field path, the
+                              BSON types of its values and the _id of documents per minority type,
+                              in profile.json (fix-mappings.mjs makes it: read it, do not run it).
+    node unmapped.mjs         the source fields that no mapping covers, with their types.
+    node verify.mjs try<N>|main   the verification of a target against the source: counts per
+                              table and per list, every mapped field compared on 50 random
+                              documents, 3 per child table and every document profile.json names
+                              for an odd type, the fields with data that no mapping covers, no
+                              VARCHAR(n), primary keys, orphans. A timestamp written as text in
+                              either form is the same value; an empty object is no row. Prints its
+                              FAILs and a summary, exits non-zero on a FAIL; all of it in
+                              verify-<target>.txt and verify-<target>.json.
+
+What mongo2pg can do, so that you do not search its documentation for more:
+- A mapping (mapping_*.yaml) sets a column's type and nullability. It does not transform values:
+  no cast, no date format, no filter on the elements of a list.
+- Keep the structure of the analysis: its tables and columns, as mongo2pg proposed them. Change
+  types (TEXT for values that do not fit) and nullability; never collapse a table into a JSONB
+  column, add a JSONB column or delete a table (fix-mappings.mjs --jsonb is not for this task).
+- A value that does not fit its column and that a type cannot take is a SQL fix on the branch
+  after the import, kept in one file in {{WORK}} and run again on each target. Rows that export
+  does not write (e.g. the scalar elements of a list that mixes objects and scalars) are loaded
+  by a script of yours in {{WORK}} (node: reads the source, inserts into the target named as its
+  argument, through nvpg uri), run on each target after the import, like the SQL fixes.
+
+How to work, for a short run: import first, and let the errors say what to fix.
+1. Read CONTEXT.md. Run node fix-mappings.mjs, regenerate (to-pg, export, with --log-level
+   error), node precheck.mjs, then the first attempt at once. No exploring before it: do not
+   read the mappings, the DDL, the CSVs or the source of the tools, and do not query the source;
+   precheck, the import and verify.mjs find what is wrong faster than you can.
+2. An attempt: nvpg branch, then at once, as the very next call, the mongo2pg import command it
+   prints (it creates the tables and loads the CSV into the branch). Nothing in between: no
+   check, no reading. If the import passes: fix-data.sql and your own fixes (run again on each
+   target), then node verify.mjs try<N>.
+   If precheck, the import or verify.mjs fails, its output says what to fix: read only what it
+   names (the mapping of that table, the field in profile.json, a few documents with srcmongo),
+   fix the cause in the mapping or DDL of the project, regenerate, node precheck.mjs, and the next
+   attempt: nvpg branch, then its import. Fix every error one output shows before the next
+   attempt, but do not hunt for others: the next run of the tools finds them faster than you can.
+3. A FAIL of verify.mjs may be the tool's: a difference you understand and accept (e.g. a number
+   kept as text) is fixed in verify.mjs if it is generic, or said in the report; do not perfect
+   it. Its summary says what failed: read verify-<target>.txt only for a FAIL the summary does not
+   explain, and never the source of verify.mjs.
+4. Once a branch passes, apply the same migration to the main database: nvpg import main,
+   fix-data.sql, your fixes, node verify.mjs main. If it fails there, that is a failed attempt
+   too: fix the project, then a new branch, which must pass before the main database is imported
+   again.
+5. Once verify.mjs passes on the main database, write REPORT.md once, from what you already know,
+   and stop: no more checks, no other count or run of a tool, no rereading what you wrote.
+
+One attempt, one branch: a branch takes one mongo2pg import. If it fails, or verify.mjs fails on
+the branch (nvpg then makes it read only), the attempt is over. Never fix a branch in place (no
+DROP, no second import, no SET on the database to make an import pass): every change goes into the
+project (mappings, DDL) or your fix files, and the next attempt is a new branch. mongo2pg import
+on the main database's config is refused: the main database is nvpg import main's.
+
+Rules:
+- Config files (*.toml) are refused to you: never try to read, list or print them. nvpg branch
+  and nvpg config give their paths, for mongo2pg -c.
+- Never print a password or a URI: every command line and its output go to the run's log.
+- Keep what a command prints short: counts, aggregations, head; never a whole file, collection or
+  CSV. Read a long output saved to a file with Grep or head, not whole.
+- profile.json answers most questions on the source; ask it the others in one script (srcmongo
+  <file.js>, or node), not one call each.
+- A question that CONTEXT.md and one grep of the docs do not answer: decide yourself, and say so
+  in the report. Aim for a run of under 50 tool calls.
+- One command per Bash call, a pipe at most: no `;`, `&&`, `cd`, `$VAR`, `$(...)`, heredoc or
+  `bash -c`. They need an approval that no one gives here, and the call is refused. Put anything
+  longer in a script in {{WORK}} and run it (python3 or node).
+- Never write to MongoDB.
+
+At the end, write {{WORK}}/REPORT.md, short sentences and tables: what you migrated and how (the
+tables), the attempts (branch, what failed, what you changed), the result of verify.mjs on the
+main database (its summary), the anomalies the profile showed and what you did with each, any
+change to a tool, and what is left. Its last line, alone:
+VERDICT: PASS (verify.mjs passed on the main database) or VERDICT: FAIL <why>.
+Your final reply: a summary of five lines at most.

@@ -95,8 +95,9 @@ BASH_MAX_OUTPUT_LENGTH=${CLAUDE_BASH_MAX_OUTPUT:-10000}
 echo $$ > "$LAB/runs/$RUN.pid"
 key_on
 command -v claude >/dev/null || die "Claude Code not found on this computer"
-[ -s "$HOME/.claude/.credentials.json" ] || [ -n "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}" ] ||
-  die "Claude Code is not logged in: nevia shell <computer>, then claude and /login (or CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env, then ./rc-lab.sh setup)"
+[ -s "$HOME/.claude/.credentials.json" ] || [ -n "${ANTHROPIC_API_KEY:-}${CLAUDE_CODE_OAUTH_TOKEN:-}${ANTHROPIC_AUTH_TOKEN:-}" ] ||
+  die "Claude Code is not logged in: nevia shell <computer>, then claude and /login (or ANTHROPIC_AUTH_TOKEN with ANTHROPIC_BASE_URL, CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in .env, then ./rc-lab.sh setup)"
+[ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] || say "Claude Code through the gateway ${ANTHROPIC_BASE_URL:-(no ANTHROPIC_BASE_URL)}, model $CLAUDE_MODEL"
 
 step "1/3 preparing: the source, the tools, nothing left of earlier runs"
 [ ! -f "$SOURCE_SH" ] || sh "$SOURCE_SH" before-run

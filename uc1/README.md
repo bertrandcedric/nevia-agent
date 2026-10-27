@@ -14,8 +14,8 @@ flowchart LR
 
     subgraph nevia["Nevia"]
         direction LR
-        secrets[/"Secrets<br/>RC_LAB_NEVIA_KEY<br/>Claude credential"/]
-        subgraph lab["rc-lab (computer)"]
+        secrets[/"Secrets<br/>NEVIA_AGENT_KEY (shared)<br/>Claude credential"/]
+        subgraph lab["nevia-agent (computer)"]
             mongo[("MongoDB<br/>(Rocket.Chat)")]
             tools["mongo2pg<br/>Claude Code + nvpg"]
         end
@@ -36,7 +36,7 @@ sequenceDiagram
     autonumber
     actor dev as You
     participant nevia as Nevia
-    participant lab as rc-lab
+    participant lab as nevia-agent
     participant mongo as MongoDB
     participant pg as rc-pg
 
@@ -161,13 +161,17 @@ What makes it a test for mongo2pg: sub-objects copied into other documents (`u`,
 
 ## Setup (once)
 
+The computer is shared with uc2 and uc3 (`AGENT`, `nevia-agent` by default): its Nevia key, its sleep and its deletion are `../computer.sh`'s (see [../README.md](../README.md)); two agents may run on it at once.
+
 Prerequisites: `nevia` (then `nevia login`) and `jq`.
 
 ```sh
-cp .env.example .env          # set NEVIA_WORKSPACE (and SOURCE, MONGO_URI, MONGO_DB for another MongoDB)
+cp ../.env.example ../.env    # once for uc1, uc2, uc3: set NEVIA_WORKSPACE (and UC1_SOURCE, UC1_MONGO_URI, UC1_MONGO_DB for another MongoDB)
 ./rc-lab.sh setup             # principal, computer, Postgres (again: renews the key)
-nevia shell rc-lab            # then: claude, /login (or CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY in .env, then setup again)
+nevia shell nevia-agent            # then: claude, /login (or CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY in .env, then setup again)
 ```
+
+Through a gateway (e.g. Aiven's AI gateway) instead: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_MODEL` in `.env` (and the `ANTHROPIC_DEFAULT_*_MODEL` if the gateway names the models its own way), then `./rc-lab.sh setup`: the token becomes a workspace secret in the computer's env, the URL and the models go with each command. No login on the computer then, so no claude.ai connector either.
 
 ## Usage
 
@@ -184,7 +188,7 @@ nevia shell rc-lab            # then: claude, /login (or CLAUDE_CODE_OAUTH_TOKEN
 ./rc-lab.sh destroy [--results] [--yes]  # deletes everything on Nevia (--results: results/ too)
 ```
 
-The prompt is `remote/migrate/task.txt`. All settings are in `.env` only (see `.env.example`). The model is `CLAUDE_MODEL`: `claude-opus-5-5` by default; `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper but may not get to `VERDICT: PASS`.
+The prompt is `remote/migrate/task.txt`. All settings are in `agent/.env` only, the one file of uc1, uc2 and uc3: a `UC1_` line is uc1's alone and wins over the plain one (see `agent/.env.example`). The model is `CLAUDE_MODEL`: `claude-opus-5-5` by default; `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper but may not get to `VERDICT: PASS`.
 
 What a run costs is mostly Claude reading its context again at every turn, so the run is kept short and its context small: the tools are ready in `work/` (`verify.mjs`, `unmapped.mjs`, `known-mappings.mjs`, `known-fixes.sql`), the known mongo2pg issues are fixed before the first attempt (`remote/migrate/known-issues.md`), mongo2pg runs with `--log-level error`, a command's output is cut at `CLAUDE_BASH_MAX_OUTPUT` characters, `verify.mjs` prints only its failures, and the collections and the verification of the report are built from `verify-main.json`, not written by Claude.
 
@@ -204,7 +208,7 @@ results/mongo2pg-issues.md   every issue across runs: known or new, in how many 
 To look at the data:
 
 ```sh
-nevia exec -t rc-lab -- sh -c '~/m2p/bin/srcmongo'    # mongosh on the source (after analyse)
+nevia exec -t nevia-agent -- sh -c '~/m2p/bin/srcmongo'    # mongosh on the source (after analyse)
 psql "$(nevia pg connect --uri rc-pg)"                # then: SET search_path = rocketchat; \dt
 psql "$(nevia pg connect --uri rc-pg-try2)"           # a failed attempt, as it failed
 nevia pg ls                                           # the database and its branches
@@ -214,14 +218,14 @@ MongoDB, one command at a time (`srcmongo` takes mongosh's arguments):
 
 ```sh
 # the collections, and the documents in each
-nevia exec rc-lab -- sh -c '~/m2p/bin/srcmongo --eval "db.getCollectionNames().sort().forEach(c => print(c, db.getCollection(c).countDocuments()))"'
+nevia exec nevia-agent -- sh -c '~/m2p/bin/srcmongo --eval "db.getCollectionNames().sort().forEach(c => print(c, db.getCollection(c).countDocuments()))"'
 # one document of a collection, to see its fields
-nevia exec rc-lab -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.findOne()"'
+nevia exec nevia-agent -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.findOne()"'
 # messages per room, the 5 busiest
-nevia exec rc-lab -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.aggregate([{ \$group: { _id: \"\$rid\", n: { \$sum: 1 } } }, { \$sort: { n: -1 } }, { \$limit: 5 }])"'
+nevia exec nevia-agent -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.aggregate([{ \$group: { _id: \"\$rid\", n: { \$sum: 1 } } }, { \$sort: { n: -1 } }, { \$limit: 5 }])"'
 # thread replies (messages with tmid), users by role
-nevia exec rc-lab -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.countDocuments({ tmid: { \$exists: true } })"'
-nevia exec rc-lab -- sh -c '~/m2p/bin/srcmongo --eval "db.users.aggregate([{ \$unwind: \"\$roles\" }, { \$group: { _id: \"\$roles\", n: { \$sum: 1 } } }])"'
+nevia exec nevia-agent -- sh -c '~/m2p/bin/srcmongo --eval "db.rocketchat_message.countDocuments({ tmid: { \$exists: true } })"'
+nevia exec nevia-agent -- sh -c '~/m2p/bin/srcmongo --eval "db.users.aggregate([{ \$unwind: \"\$roles\" }, { \$group: { _id: \"\$roles\", n: { \$sum: 1 } } }])"'
 ```
 
 Postgres, the same checks (the schema is the MongoDB database's name, `rocketchat`; add `-try<N>` for a branch):
@@ -243,7 +247,7 @@ psql "$PG" -c "SELECT conrelid::regclass AS tbl, conname, pg_get_constraintdef(o
 
 The table and column names come from the run's mapping: if one is not there, look it up with `\dt` and `\d` first.
 
-A sleeping computer or database: `nevia awake rc-lab --wait`, `nevia pg awake rc-pg --wait`.
+A sleeping computer or database: `nevia awake nevia-agent --wait`, `nevia pg awake rc-pg --wait`.
 
 ## Code
 
@@ -260,9 +264,10 @@ remote/analyse/context.mjs          CONTEXT.md: counts, tables, infer warnings
 remote/migrate/run.sh            4. clean slate, the tools in work/, Claude, the result (detached)
 remote/migrate/task.txt             Claude's task
 remote/migrate/known-issues.md      the known mongo2pg issues: how to see each one, how to fix it
-remote/migrate/known-mappings.mjs   their mechanical mapping fixes, in every mapping at once (VARCHAR(n), UUID ids)
+remote/migrate/known-mappings.mjs   their mapping fixes: VARCHAR(n), UUID ids, a subtree as JSONB (--jsonb)
 remote/migrate/known-fixes.sql      their post-import fixes (no mapping can do them)
-remote/migrate/verify.mjs           the verification: counts, child tables, samples, keys, the source's checks
+remote/migrate/verify.mjs           the verification: counts, child tables, samples (random and per child table),
+                                    coverage of every field with data, no VARCHAR(n), keys, the source's checks
 remote/migrate/unmapped.mjs         the source fields no mapping covers
 remote/migrate/nvpg                 Claude's only access to Nevia: the branches of rc-pg
 remote/migrate/timing.jq            where a run's time went

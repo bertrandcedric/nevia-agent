@@ -10,11 +10,19 @@
 # A branch is never promoted: once an import passes on one, run it again on the database. No rm:
 # the branch of each failed attempt stays, as it failed, until the next run starts clean.
 set -eu
-. "$HOME/m2p/lab.env"
-export NEVIA_WORKSPACE NEVIA_KEY_FILE=$HOME/m2p/.nevia-key
-PATH=$HOME/.local/bin:$PATH
 die() { echo "nvpg: $*" >&2; exit 1; }
-nv() { nevia --non-interactive "$@"; }
+. "$HOME/m2p/lab.env"
+# The key file of the run that started Claude (setup/env.sh): deleted when that run ends.
+[ -n "${NEVIA_KEY_FILE:-}" ] && [ -s "$NEVIA_KEY_FILE" ] || die "no Nevia key file (NEVIA_KEY_FILE): nvpg runs inside a migrate run"
+export NEVIA_WORKSPACE NEVIA_KEY_FILE
+PATH=$HOME/.local/bin:$PATH
+# --non-interactive where the CLI has it (nevia 0.1.13 and the one on a Nevia computer don't).
+NV_NI=; ! nevia --non-interactive --help >/dev/null 2>&1 || NV_NI=--non-interactive
+# --yes after the subcommand, where it has the flag (see lib.sh's nv).
+nv() {
+  if [ "$1" = --yes ]; then shift; ! nevia "$@" --help 2>/dev/null | grep -q -- '--yes' || set -- "$@" --yes; fi
+  nevia $NV_NI "$@"
+}
 
 target() {
   case ${1:-} in
