@@ -1,17 +1,9 @@
-# Copilot's --output-format json events, one per input line, as readable lines for logs/session-N.log:
-#   HH:MM:SS intent: Creating try 2
-#   HH:MM:SS $ psql ... (continuation lines indented)
-#   HH:MM:SS failed: what the tool answered
-# Lines that are not JSON (Copilot's stderr) pass through as they are.
-# Token counts come out as `usage:` lines, which `agent m2p run` reads for the cost.
-
+# GitHub Copilot CLI's --output-format json events, one per input line, in common.jq's vocabulary.
 include "common";
-def counts: "input=\(.inputTokens // .input_tokens // .prompt_tokens // 0)"
-  + " cached=\(.cacheReadTokens // .cache_read_tokens // .cached_tokens // 0)"
-  + " output=\(.outputTokens // .output_tokens // .completion_tokens // 0)";
 
 def render:
-  (.timestamp // "" | tostring | .[11:19]) as $at |
+  # The event's own time (ISO 8601, UTC) in TZ, as `at` writes it.
+  (try (.timestamp[0:19] + "Z" | fromdateiso8601 | localtime | strftime("%H:%M:%S")) catch at) as $at |
   (.data // {} | if type == "object" then . else {} end) as $d |
   if .type == "tool.execution_start" then
     ($d.arguments // {} | if type == "object" then . else {} end) as $a |
@@ -39,15 +31,11 @@ def render:
     end
   elif .type == "user.message" then "\($at) prompt: \($d.content // "" | clip(500) | indent)"
   elif .type == "session.error" then "\($at) error: \($d.message // "" | clip(1000) | indent)"
-  elif .type == "assistant.usage" then "\($at) usage: model=\($d.model // "") \($d | counts)"
-  elif ($d.modelMetrics | type) == "object" then
-    $d.modelMetrics | to_entries[] | (.value | if type == "object" then . else {} end) as $m
-    | "usage total: model=\(.key) requests=\($m.requests.count // 0) \($m.usage // $m | counts)"
   elif .type == "result" then
     "\($at) result: exit \(.exitCode // "?"), \((.usage.sessionDurationMs // 0) / 1000 | floor) s"
     + (.usage.codeChanges.filesModified // [] | if length > 0 then ", changed \(join(", "))" else "" end)
   else empty
   end;
 
-. as $line | (try fromjson catch null) as $event
-| if ($event | type) == "object" then $event | render else $line end
+inputs | . as $line | (try fromjson catch null) as $event |
+if ($event | type) == "object" then $event | render else (select($line | test("\\S")) | $line) end

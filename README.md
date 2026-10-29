@@ -5,10 +5,13 @@ one half of the migration. Everything runs on Nevia; here, only the `agent` CLI.
 
 | Agent | Moves | With | Gives you |
 | --- | --- | --- | --- |
-| [**m2p**](docs/m2p.md) | the **data** | Copilot CLI and [mongo2pg](https://github.com/pmpetit/mongo2pg) | a Postgres loaded and checked by mongo2pg's post-import report, and the SQL it took |
-| [**acc**](docs/acc.md) | the **code** | Claude Code | a pull request, tested on a sandbox of the app (also for any feature you describe) |
+| [**m2p**](docs/m2p.md) | the **data** | an AI agent and [mongo2pg](https://github.com/pmpetit/mongo2pg) | a Postgres loaded and checked by mongo2pg's post-import report, and the SQL it took |
+| [**acc**](docs/acc.md) | the **code** | an AI agent | a pull request, tested on a sandbox of the app (also for any feature you describe) |
 
-A 10-slide deck of this path, to present it: [docs/presentation.md](docs/presentation.md) (Marp).
+The AI agent is Claude Code, or GitHub Copilot CLI with `[ai] engine = "copilot"` in `agent.toml`, for both;
+models go through the Aiven AI gateway.
+
+A 10-slide deck of this path, with an animated diagram of each agent, to present it: [docs/presentation.md](docs/presentation.md) (Marp).
 
 ## The migration
 
@@ -58,8 +61,8 @@ when to merge and when to cut over.
 
 ## Setup
 
-Prerequisites: `uv`, `curl`, a Nevia workspace (and `nevia login`), SSH access
-to [aiven/nevia-kit](https://github.com/aiven/nevia-kit), an Aiven AI gateway key, and for acc a GitHub
+Prerequisites: `uv`, `curl`, the `nevia` CLI and a Nevia workspace (`nevia login`), SSH access
+to [aiven/nevia-kit](https://github.com/aiven/nevia-kit) (for its tunnels), an Aiven AI gateway key, and for acc a GitHub
 fine-grained token on the app's repository (*Contents* and *Pull requests*: read and write).
 
 ```sh
@@ -71,8 +74,12 @@ uv run agent acc setup
 
 - **`.env`** (ignored by git; [.env.example](.env.example) lists what goes in it) holds the secrets. `agent`
   reads it at each command, without overriding the shell's variables.
-- **`agent.toml`** holds everything else: `[nevia]` and `[mongo2pg]` for both agents, then `[m2p.*]` and
-  `[acc.*]`.
+- **`agent.toml`** holds what you may choose: `[nevia]`, `[runtime]`, `[ai]`, `[mongodb]` and `[mongo2pg]` for
+  both agents, then `[m2p.*]` and `[acc.*]`. What is a convention (secret names, users, paths) is in the code.
+- **`[ai]`**: `engine = "claude"` (Claude Code, the default) or `"copilot"` (GitHub Copilot CLI), each with
+  its own `[ai.claude]` or `[ai.copilot]`: version, gateway URL, model, reasoning effort. The gateway key is
+  the env var `gateway_secret` names; an empty `ai.claude.gateway_url` means a Claude Code login on the agent
+  computer instead.
 - **Names**: everything an agent makes on Nevia carries its name, so both share a workspace: resources
   `m2p-...` and `acc-...` (a setting that breaks this is refused), workspace secrets `M2P_...` and `ACC_...`.
 
@@ -82,6 +89,10 @@ Your machine does three things on Nevia, and nothing else: it makes the agent co
 `acc-agent`) with its own key and the secrets from `.env`, sends it this code, and in the end deletes them.
 From there, the agent does everything else (databases, branches, sandboxes, pull requests), signed in with its
 key; your machine only follows it.
+
+Both sides drive Nevia with the **`nevia` CLI** (`src/core/nevia.py`): yours, signed in with `nevia login`, and
+the agent computer's (`[runtime] nevia`), signed in with its key, which its AI uses too. Only the tunnels
+(the agent's link to a MongoDB computer) go through nevia-kit: the CLI has none.
 
 ```mermaid
 flowchart LR
@@ -99,7 +110,8 @@ flowchart LR
 ```
 
 `setup` sends the code each time: uv installs it on the computer, with nevia-kit (a private repository the
-computer can't clone) and the dependencies at the versions installed here (`[runtime]` in `agent.toml`).
+computer can't clone) and the dependencies at the versions installed here, next to the nevia CLI (`[runtime]`
+in `agent.toml`).
 
 ## Commands
 
@@ -122,7 +134,7 @@ Results land in `build/m2p-runs/` and `build/acc-runs/`.
   service that needs it); none is printed, and connection URIs are scrubbed from logs.
 - `clean` and `destroy` touch only the names in `agent.toml` and those made from them.
 - Each agent computer holds its own *editor* key on the workspace (a week, renewed by deleting its secret and
-  running `setup`), in a mode-600 file: use a dedicated workspace.
+  running `setup`), in a mode-600 file, and so does its AI, through the CLI: use a dedicated workspace.
 
 ## Code
 
@@ -131,8 +143,9 @@ agent.toml, .env.example   settings and secrets of both agents
 src/
   core/local/              your machine: the `agent` CLI, the agent computer made (bootstrap), this code
                            sent there (runtime), results brought back (collect), .env
-  core/agent/              the agent computer: mongo2pg's binary, the prompts
-  core/scripts/            any Nevia computer: lib.sh, MongoDB, common.jq, the runtime's setup
+  core/agent/              the agent computer: the AI agent (ai.py: Claude Code or Copilot CLI), mongo2pg's
+                           binary, the prompts
+  core/scripts/            any Nevia computer: lib.sh, MongoDB, the AI's render-<engine>.jq, the runtime's setup
   core/*.py                both sides: settings, computers and their jobs, the agents' activity
   prompts/m2p/, prompts/acc/   what each model is told
   m2p/, acc/               each agent: local.py (your machine), agent.py and steps.py (its computer), scripts/,

@@ -5,15 +5,17 @@ import pytest
 from nevia_kit.testing import FakeApi
 
 from core.computer import agent_command
-from core.local import runtime
+from core.doomed import Doomed
+from core.local import bootstrap, runtime
 from core.local.bootstrap import Bootstrap, Wanted
 from m2p import config as m2p_config
 from m2p import local as m2p_local
+from tests.fake_nevia import on_fake
 
 
 def _boot(fake: FakeApi) -> Bootstrap:
     s = m2p_config.load()
-    return m2p_local.bootstrap(s, fake.client())
+    return m2p_local.bootstrap(s, on_fake(fake))
 
 
 def test_secrets_come_from_the_env_prefixed_and_a_missing_one_stops_before_the_computer() -> None:
@@ -48,11 +50,11 @@ def test_the_key_is_made_once_and_reaches_the_computer_through_the_exec_env_only
 
 def test_a_principal_left_without_its_secret_gets_a_new_key() -> None:
     fake = FakeApi(validate=True)
-    nevia = fake.client()
+    nevia = on_fake(fake)
     boot = m2p_local.bootstrap(m2p_config.load(), nevia)
-    pid = nevia.access.add_key_principal("editor", name="m2p-agent", description="m2p agent")["access"]["principal"][
-        "id"
-    ]
+    pid = nevia.kit.access.add_key_principal("editor", name="m2p-agent", description="m2p agent")["access"][
+        "principal"
+    ]["id"]
     fake.access[pid]["principal"].update(auth="private_key", name="m2p-agent")
     boot.key()
     assert len(fake.ops("createAccess")) == 1  # the one above: none made again
@@ -64,13 +66,13 @@ def test_a_principal_left_without_its_secret_gets_a_new_key() -> None:
 def test_destroy_takes_the_agent_its_principal_and_its_secrets_only() -> None:
     fake = FakeApi(validate=True)
     fake.add("computers", "m2p-agent")
-    nevia = fake.client()
+    nevia = on_fake(fake)
     for name in ("M2P_AIVEN_AI_API_KEY", "M2P_NEVIA_AGENT_KEY", "AIVEN_AI_API_KEY", "ACC_NEVIA_AGENT_KEY"):
         nevia.secrets.set(name, "x")
     boot = m2p_local.bootstrap(m2p_config.load(), nevia)
-    ours = nevia.access.add_key_principal("editor", name="m2p-agent", description="m2p agent")["access"]
+    ours = nevia.kit.access.add_key_principal("editor", name="m2p-agent", description="m2p agent")["access"]
     fake.access[ours["principal"]["id"]]["principal"].update(auth="private_key", name="m2p-agent")
-    theirs = nevia.access.add_key_principal("editor", name="acc-agent", description="acc agent")["access"]
+    theirs = nevia.kit.access.add_key_principal("editor", name="acc-agent", description="acc agent")["access"]
     fake.access[theirs["principal"]["id"]]["principal"].update(auth="private_key", name="acc-agent")
     d = boot.doomed()
     assert d.computers == ["m2p-agent"]
@@ -103,3 +105,24 @@ def test_remote_commands_run_this_code_on_the_computer() -> None:
         agent_command("acc", "run", "task", "--file", "~/x y")
         == "~/.nevia-agent/bin/agent acc remote run task --file '~/x y'"
     )
+
+
+def test_destroy_lists_both_parts_asks_then_the_agent_and_your_machine_delete(monkeypatch) -> None:
+    fake = FakeApi(validate=True)
+    fake.add("computers", "m2p-agent")
+    nevia = on_fake(fake)
+    nevia.secrets.set("M2P_NEVIA_AGENT_KEY", "x")
+    boot = m2p_local.bootstrap(m2p_config.load(), nevia)
+    deleted: list[str] = []
+    fake.on_exec("remote destroy --yes", lambda _a, _b: deleted.append("theirs") or "deleted computer m2p-mongo\n")
+    fake.on_exec("remote destroy", Doomed(["m2p-mongo"], databases=["m2p-pg"]).to_json() + "\n")
+    shown: list[str] = []
+    monkeypatch.setattr(bootstrap, "show", shown.append)
+    monkeypatch.setattr(bootstrap.typer, "confirm", lambda *_a, **_k: (_ for _ in ()).throw(SystemExit(1)))
+    with pytest.raises(SystemExit):
+        boot.destroy(yes=False)
+    assert "computers: m2p-mongo, m2p-agent" in shown[0] and "databases: m2p-pg" in shown[0]
+    assert not deleted and fake.find("computers", "m2p-agent")  # nothing deleted before the yes
+    boot.destroy(yes=True)
+    assert deleted == ["theirs"]  # the agent's part first, then your machine's
+    assert not fake.find("computers", "m2p-agent") and not any(nevia.secrets.list())

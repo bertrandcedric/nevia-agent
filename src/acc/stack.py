@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
-from nevia_kit import Nevia
 
 from acc.computer import Computer, secret
 from acc.config import Settings
+from core.nevia import Nevia
 from core.shell import console
 
 Kind = Literal["mongo", "postgres"]
@@ -81,8 +81,8 @@ class Stack:
         pc.awake()
         if not any(p["published"] == 443 for p in self.nevia.computers.ports(name)):
             self.nevia.computers.publish(name, 443, CHISEL_PORT)
-        image = self.settings.images.mongo
-        pc.put_mongo({"MONGO_IMAGE": image, "MONGO_CACHE_GB": str(m.cache_gb), "MONGO_POD": "acc",
+        image = self.settings.mongodb.image
+        pc.put_mongo({"MONGO_IMAGE": image, "MONGO_CACHE_GB": str(self.settings.mongodb.cache_gb), "MONGO_POD": "acc",
                       "MONGO_CONTAINER": "acc-mongo", "MONGO_DB": m.database, "MONGO_PUBLISH": "1",
                       "CHISEL_VERSION": c.version})  # fmt: skip
         if init is not None:

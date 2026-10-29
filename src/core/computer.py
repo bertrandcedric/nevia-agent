@@ -13,8 +13,7 @@ from importlib import resources
 from pathlib import Path
 from typing import ClassVar
 
-from nevia_kit import Nevia, NeviaError
-
+from core.nevia import Nevia, NeviaError
 from core.shell import console, redact, run
 
 DOWNLOAD_TRIES = 3

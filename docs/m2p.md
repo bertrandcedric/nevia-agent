@@ -1,6 +1,6 @@
 # m2p: the data
 
-Copilot CLI, on its own Nevia computer, works out how to load the hello MongoDB (the customers of
+An AI agent (`[ai] engine`: Claude Code, or Copilot CLI), on its own Nevia computer, works out how to load the hello MongoDB (the customers of
 [nevia-helloworld](https://github.com/bertrandcedric/nevia-helloworld)) into PostgreSQL with mongo2pg: it tries
 loads on branches of the target until mongo2pg's report says the copy matches. Setup, commands and
 naming: [README](../README.md).
@@ -12,22 +12,23 @@ naming: [README](../README.md).
 | `m2p-mongo` | MongoDB in a pod, with the data `seed.py` generates there |
 | `m2p-pg` | the target Postgres; its URI in `M2P_PG_URL` |
 | `m2p-try1`, `m2p-try2`... | a branch of `m2p-pg` per try, kept until `clean`: the agent never deletes one |
-| `m2p-agent` | runs everything, with its key (`M2P_NEVIA_AGENT_KEY`): it makes `m2p-mongo` and `m2p-pg` at `setup`; Copilot CLI, mongo2pg's binary, the `nevia` CLI signed in with the same key, MongoDB at `127.0.0.1:27017` through a nevia-kit link |
+| `m2p-agent` | runs everything, with its key (`M2P_NEVIA_AGENT_KEY`): it makes `m2p-mongo` and `m2p-pg` at `setup`; the AI agent, mongo2pg's binary, the `nevia` CLI signed in with the same key, MongoDB at `127.0.0.1:27017` through a nevia-kit link |
 
-The gateway key (`M2P_AIVEN_AI_API_KEY`) reaches only the agent process.
+The gateway key (`M2P_AIVEN_AI_API_KEY`) reaches only the AI's sessions. The AI may do anything on `m2p-agent`:
+the computer is its own.
 
 ```mermaid
 flowchart LR
     cli["agent m2p<br/>(your machine)"]
     gateway["Aiven AI gateway"]
     subgraph nevia["Nevia"]
-        agent["m2p-agent<br/>Copilot CLI, mongo2pg,<br/>nevia CLI"]
+        agent["m2p-agent<br/>the AI agent, mongo2pg,<br/>nevia CLI"]
         mongo["m2p-mongo<br/>MongoDB + data"]
         pg[("m2p-pg<br/>the target")]
         branches[("m2p-tryN<br/>branches of m2p-pg")]
     end
     cli -. "starts it, follows it" .-> agent
-    agent -- "nevia-kit link" --> mongo
+    agent -- "a link (nevia-kit)" --> mongo
     agent -- "branch.sh" --> branches
     agent -- "once a try passes" --> pg
     agent -- "model calls" --> gateway
@@ -40,7 +41,7 @@ sequenceDiagram
     autonumber
     actor you as You
     participant cli as agent m2p
-    participant agent as m2p-agent (Copilot)
+    participant agent as m2p-agent (the AI)
     participant mongo as m2p-mongo
     participant pg as m2p-pg and its branches
 
@@ -55,7 +56,7 @@ sequenceDiagram
         Note over agent: records the try in ATTEMPTS.md, and when it fails<br/>changes the config, the mappings or normalize.sql
     end
     agent->>pg: the passing load into m2p-pg, then DONE.md
-    cli->>you: results in build/m2p-runs/, tokens and cost
+    cli->>you: results in build/m2p-runs/
 ```
 
 - The agent follows `src/prompts/m2p/AGENTS.md`, which gives no hints about the known issues.
@@ -65,7 +66,7 @@ sequenceDiagram
 - A load passes when mongo2pg's post-import report has the same row count and matching MD5 for every table,
   and nothing else checks it. A table `normalize.sql` converted passes on its row count: the report hashes
   MongoDB's original values.
-- A run ends with `DONE.md`, after `m2p.agent.sessions` Copilot sessions, after `m2p.agent.hours`, or with
+- A run ends with `DONE.md`, after `m2p.agent.sessions` AI sessions, after `m2p.agent.hours`, or with
   `stop`. `run --details` shows every command and edit.
 - `clean` empties `~/loop` (all but the guide, tools, binary and mongo2pg checkout), deletes the `m2p-try*`
   branches and drops the `hello` schema of `m2p-pg`.
@@ -78,11 +79,11 @@ sequenceDiagram
   `tries/tryN/`, and `tries/final/` for `m2p-pg`
 - `final.sql`: all the SQL `m2p-pg` was loaded with, in order: the DDL the final import applied, then
   `normalize.sql`
-- `logs/session-N.log`: one line per thing the agent did in each Copilot session, and `agent-job.log`
+- `logs/session-N.log`: one line per thing the agent did in each AI session (its raw events in
+  `session-N.jsonl`), and `agent-job.log`
 - `skipped.txt`: files over 20 MiB left on the computer, as are each load's CSV export, the tools and the binary
 
-If the download fails three times, `run` again collects them. The cost uses `m2p.copilot.price_*` (US dollars
-per million tokens, 0 until set).
+If the download fails three times, `run` again collects them.
 
 ## The data
 

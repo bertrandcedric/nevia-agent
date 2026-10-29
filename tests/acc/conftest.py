@@ -1,9 +1,10 @@
 import pytest
-from nevia_kit import Nevia
 from nevia_kit.testing import FakeApi
 
 from acc import agent, config
 from acc.agent import Agent
+from core.nevia import Nevia
+from tests.fake_nevia import on_fake
 
 
 @pytest.fixture
@@ -22,7 +23,7 @@ def fake(settings: config.Settings) -> FakeApi:
 
 @pytest.fixture
 def nevia(fake: FakeApi) -> Nevia:
-    return fake.client()
+    return on_fake(fake)
 
 
 @pytest.fixture

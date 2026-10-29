@@ -1,8 +1,9 @@
 import pytest
-from nevia_kit import Nevia
 from nevia_kit.testing import FakeApi
 
+from core.agent import ai
 from core.computer import bundled
+from core.nevia import Nevia
 from m2p.computer import Computer, JobFailed, redact
 from m2p.config import Settings
 
@@ -18,9 +19,8 @@ def test_redact_hides_uri_passwords() -> None:
 
 
 def test_bundled_scripts_are_packaged() -> None:
-    for name in ["render.jq", "branch.sh"]:
-        assert bundled("m2p", f"scripts/{name}")
-    for name in ["lib.sh", "mongo-host.sh", "mongo-up.sh", "common.jq", "setup-runtime.sh"]:  # both agents'
+    assert bundled("m2p", "scripts/branch.sh")
+    for name in ["lib.sh", "mongo-host.sh", "mongo-up.sh", "setup-runtime.sh", *ai.TOOLS]:  # both agents'
         assert bundled("core", f"scripts/{name}")
 
 

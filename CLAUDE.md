@@ -9,8 +9,10 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
 
 - Python 3.15 with uv: `uv sync`, then `uv run ruff format`, `uv run ruff check`, `uv run ty check` and
   `uv run pytest` before a commit (the prek hooks, `uv run prek install`, run ruff and ty too). No just.
-- The CLI is `uv run agent`. Settings and pinned versions are in `agent.toml`: `[nevia]` and `[mongo2pg]`
-  shared, then `[m2p.*]` and `[acc.*]`; it holds no secret, only their names. Never hard-code Nevia names or
+- The CLI is `uv run agent`. Settings and pinned versions are in `agent.toml`: `[nevia]`, `[runtime]`, `[ai]`,
+  `[mongodb]` and `[mongo2pg]` shared, then `[m2p.*]` and `[acc.*]`; it holds no secret, only the gateway key's
+  env var. Keep in it only what someone may choose: conventions (secret names, users, paths) are ClassVars
+  or constants in the code. Never hard-code Nevia names or
   versions in code. The two agents' Nevia names must not collide: they share a workspace.
 - Secrets come from `.env` (ignored by git; `.env.example` lists them), which `agent` loads at each command
   without overriding the shell. Add a secret an agent needs to `.env.example`.
@@ -22,28 +24,32 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
     `stack.py` and `pr.py`; none of it imports `core.local` or a `local` module;
   - **any Nevia computer**: the bash and jq in `core/scripts/` (both agents') and `<agent>/scripts/`, only where
     Python can't be: the MongoDB and app computers, the runtime's setup, and the AI agents' own tools
-    (`branch.sh`, `render.jq`). On the agent computer, the work is Python (`<agent>/steps.py`): a subprocess
+    (`branch.sh`, `render-<engine>.jq`). On the agent computer, the work is Python (`<agent>/steps.py`): a subprocess
     here, or a job (`agent <agent> remote step ...`) when it needs a secret, the one way its template gets a
     value. `Computer` runs commands and writes files locally when it is the computer itself (`here`);
   - **both sides**: `core/config.py`, `core/computer.py` (`Computer` and its jobs; each agent's
     `computer.py` names its scripts and jobs dir), `core/activity.py`, `core/shell.py`.
   Put what both agents need in core, not in one of them.
-- Nevia goes through [nevia-kit](https://github.com/aiven/nevia-kit), pinned to a release tag in
-  `pyproject.toml` (`[tool.uv.sources]`); generic Nevia fixes belong in nevia-kit. The one local command,
+- Nevia goes through the `nevia` CLI, `core.nevia.Nevia` (`--json`, the API's documents): yours on your machine
+  (`nevia login`), the agent computer's (`[runtime] nevia`, its key file) there, for the code and the AI alike.
+  Only the tunnels go through [nevia-kit](https://github.com/aiven/nevia-kit) (`Nevia.kit`), pinned to a release
+  tag in `pyproject.toml` (`[tool.uv.sources]`): the CLI has none. Add what the code needs to `core.nevia`. The one local command,
   curl for mongo2pg's release binary, goes through `core.shell.Runner`.
-- Tests use nevia-kit's `FakeApi` (`validate=True`) and never reach Nevia, podman, git, GitHub or the network:
+- Tests use nevia-kit's `FakeApi` (`validate=True`) behind a fake `nevia` (`tests/fake_nevia.py`, which reads the
+  command lines as the CLI does) and never reach Nevia, podman, git, GitHub or the network:
   `tests/m2p/`, `tests/acc/`, and `tests/` for core.
 - Scripts run on Nevia computers (Debian 13, bash) and source `~/.nevia-agent/lib.sh` (`core/scripts/lib.sh`:
   messages, `apt_install`, `fetch_checked`, installers); what both agents run is in `core/scripts/`:
-  `mongo-host.sh` and `mongo-up.sh` (MongoDB in a Podman pod, `[images] mongo`; auth, init scripts and chisel
-  for an app's), and `common.jq`, which both render.jq include so that their logs read alike
+  `mongo-host.sh` and `mongo-up.sh` (MongoDB in a Podman pod, `[mongodb]`; auth, init scripts and chisel
+  for an app's), and `render-claude.jq` and `render-copilot.jq`, which include `common.jq` so that both
+  engines' logs read alike
   (`core.activity` parses them). Add to these rather than to one agent.
 - Long remote work runs through `Computer.start_job`/`wait_job`/`run_job` (nohup plus polling), because Nevia
   exec sessions drop.
 - mongo2pg is always `mongo2pg.release`'s binary, never built, here or on an agent computer.
 - Every prompt is a file in `src/prompts/<agent>/`, read with `core.agent.prompts.prompt`, one per task and in the
   same shape (the job, `## What is here`, how to check, `## How to work`, the expected output as a template,
-  `## Rules`): m2p's `AGENTS.md`, each Copilot session's prompt (filled with `str.format`, so literal braces
+  `## Rules`): m2p's `AGENTS.md`, each AI session's prompt (filled with `str.format`, so literal braces
   are doubled), acc's `MIGRATE.md` and `FEATURE.md` (`{{REPO}}`, `{{BRANCH}}`, `{{RUN_DIR}}`, `{{CHECK}}`,
   then `{{TASK}}` replaced as text). Keep prompt text out of code.
 
@@ -62,12 +68,10 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
 ### acc
 
 - The agent computer drives a run (`acc/agent.py`): it makes the databases, checkpoints and sandboxes with
-  nevia-kit, and runs the long work as jobs. Each step is recorded in the run's `state.json` once done, so a
+  the nevia CLI, and runs the long work as jobs. Each step is recorded in the run's `state.json` once done, so a
   run can be taken up: keep steps safe to redo.
-- `acc/steps.py` is a run's work (clone, analysis, Claude as its own user, build, seed data, pull request,
-  setup); `acc/scripts/` holds `app-up.sh`, the app computer's, and `render.jq`.
-- The gateway settings are named as m2p's (`gateway_url`, `gateway_secret`, `model`, `reasoning_effort`):
-  keep the two agents alike.
+- `acc/steps.py` is a run's work (clone, analysis, the AI as its own user, build, seed data, pull request,
+  setup); `acc/scripts/` holds `app-up.sh`, the app computer's.
 
 ## Rules
 
@@ -83,8 +87,9 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
 - Your machine makes only the agent computer, its principal and key, and the secrets from `.env`
   (`core.bootstrap`), sends it this code (`core.runtime`), follows it by exec, and deletes those at the end.
   Everything else runs there, through the hidden `agent <m2p|acc> remote ...` commands: keep it so.
-- acc: Claude runs as its own Unix user (`acc.claude.user`), with the run's directory lent to it: it can't read
-  the key file or the orchestrator's env. Claude sees the structure of the data, never its
+- acc: the AI runs as its own Unix user (`acc.config.AI_USER`), with the run's directory lent to it, and the
+  `nevia` CLI with a copy of the agent's key (`steps.lend_nevia`): it can't read the orchestrator's env or its
+  jobs' secrets. Its prompts let it look at Nevia, not change it. The AI sees the structure of the data, never its
   values: `steps.analyse` strips the sample values and deletes the mongo2pg project (its config holds the URIs).
   Every Nevia name an agent makes carries it: resources `m2p-`/`acc-` (checked by `AgentSettings`), secrets
   `M2P_`/`ACC_` (always through `Settings.secret`).

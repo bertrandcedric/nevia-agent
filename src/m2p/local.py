@@ -9,28 +9,19 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from nevia_kit import Nevia, NeviaError
-from rich.console import Console
-from rich.table import Table
 
 from core.config import BUILD_DIR
-from core.doomed import Doomed
 from core.local.bootstrap import Bootstrap, Wanted
 from core.local.collect import Collect
 from core.local.collect import collect as collect_results
-from core.shell import console
-from m2p import agent, config, usage
+from core.nevia import Nevia, NeviaError
+from core.shell import console, out, show
+from m2p import agent, config
 from m2p.agent import AGENT_JOB, Activity, Status, status_of
 from m2p.computer import JOBS_DIR, Computer
 
 app = typer.Typer(no_args_is_help=True, help=__doc__, pretty_exceptions_show_locals=False)
 app.add_typer(agent.remote, name="remote")  # what the commands do on the agent computer
-
-out = Console()
-
-
-def _line(text: str) -> None:
-    out.print(text, markup=False, highlight=False)
 
 
 def _settings() -> config.Settings:
@@ -85,8 +76,8 @@ def final_sql(project: Path, target: str) -> str:
 def bootstrap(s: config.Settings, nevia: Nevia) -> Bootstrap:
     """What your machine makes on Nevia for m2p: the agent computer, its key, the gateway key's secret."""
     pc = Computer(s.agent.computer, nevia, settings=s)
-    return Bootstrap("m2p", pc, s.runtime, s.secret, s.agent.secret, s.agent.key_path,
-                     [Wanted(s.copilot.gateway_secret, s.copilot.gateway_secret)])  # fmt: skip
+    wanted = [Wanted(s.ai.gateway_secret, s.ai.gateway_secret)] if s.ai.gateway_url else []
+    return Bootstrap("m2p", pc, s.runtime, s.secret, s.agent.secret, s.agent.key_path, wanted)
 
 
 def run_id(pc: Computer, loop_dir: str) -> str:
@@ -97,7 +88,7 @@ def run_id(pc: Computer, loop_dir: str) -> str:
 
 def collect(s: config.Settings, nevia: Nevia, dest: Path | None = None) -> Path:
     """The run's results here, in `build/m2p-runs/<run>/` (`core.local.collect`, as acc's): the agent's files in
-    LOOP (notes, scripts, its mongo2pg projects in tries/, and `logs/session-N.log`, one per Copilot session)
+    LOOP (notes, scripts, its mongo2pg projects in tries/, and `logs/session-N.log`, one per AI session)
     and the agent job's log; then `final.sql`, all the SQL the target was loaded with."""
     pc = Computer(s.agent.computer, nevia, settings=s)
     dest = dest or RUNS_DIR / run_id(pc, s.agent.dir)
@@ -137,7 +128,7 @@ class Local:
         return self._remote("running").strip() == "yes"
 
     def run(self) -> None:
-        out.print(self._remote("run").rstrip(), markup=False, highlight=False)
+        show(self._remote("run"))
 
     def status(self) -> Status:
         return status_of(self._remote("status").strip().splitlines()[-1])
@@ -146,13 +137,7 @@ class Local:
         self._remote("stop")
 
     def clean(self) -> None:
-        out.print(self._remote("clean").rstrip(), markup=False, highlight=False)
-
-    def doomed(self) -> Doomed:
-        return Doomed.from_json(self._remote("destroy"))
-
-    def destroy(self) -> None:
-        out.print(self._remote("destroy", "--yes").rstrip(), markup=False, highlight=False)
+        show(self._remote("clean"))
 
     def collect(self) -> Path:
         return collect(self.settings, self.nevia)
@@ -231,10 +216,7 @@ def _print_activity(events: list[Activity], *, details: bool) -> None:
 def agent_setup() -> None:
     """Make the agent computer, its key and the gateway key's secret, send it this code; then, from there, Mongo,
     Postgres, the agent's tools and its link to Mongo. Safe to repeat."""
-    boot = _agent().bootstrap()
-    boot.up(dict(os.environ))
-    boot.remote_job("m2p-setup", "setup")
-    boot.computer.follow_job("m2p-setup", _line)
+    _agent().bootstrap().setup(dict(os.environ))
 
 
 Interval = Annotated[float, typer.Option(help="Seconds between checks.")]
@@ -310,7 +292,7 @@ def agent_run(interval: Interval = 10, details: Details = False) -> None:
     else:
         lp.run()
     _follow(lp, interval, details=details)
-    _print_cost(lp.collect())
+    lp.collect()
 
 
 @app.command("status")
@@ -349,35 +331,4 @@ def agent_clean(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask
 def agent_destroy(yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask first.")] = False) -> None:
     """Delete everything `setup` made on Nevia: the agent deletes Mongo, Postgres and its branches, then your
     machine the agent computer, its key and the secrets."""
-    ag = _agent()
-    boot = ag.bootstrap()
-    mine = boot.doomed()
-    theirs = ag.doomed() if mine.computers else Doomed()
-    if not (mine or theirs):
-        out.print("nothing to delete")
-        return
-    for line in (theirs + mine).lines():
-        out.print(line)
-    if not yes:
-        typer.confirm("Delete all of these? It can't be undone (collected runs in build/ stay)", abort=True)
-    if theirs:
-        ag.destroy()
-    boot.teardown(mine)
-
-
-def _print_cost(run: Path) -> None:
-    """Tokens by session and model, and the run's cost at `m2p.copilot.price_*` in agent.toml."""
-    c = _settings().copilot
-    sessions = usage.run(run / "logs", c.model)
-    if not any(sessions.values()):
-        out.print("[yellow]cost: unknown, Copilot's session log has no token counts")
-        return
-    t = Table("session", "model", "requests", "input", "cached", "output", "cost (USD)")
-    for name, by_model in [*sessions.items(), ("total", usage.total(sessions))]:
-        for model, u in by_model.items():
-            cost = f"{u.cost(c):,.2f}"
-            row = (name, model, f"{u.requests:,}", f"{u.input:,}", f"{u.cached:,}", f"{u.output:,}", cost)
-            t.add_row(*row, style="bold" if name == "total" else None)
-    out.print(t)
-    if not (c.price_input or c.price_cached_input or c.price_output):
-        out.print("[yellow]m2p.copilot.price_* in agent.toml are 0: set them for a cost")
+    _agent().bootstrap().destroy(yes=yes)

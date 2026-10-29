@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import shlex
 import shutil
@@ -10,12 +11,12 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from nevia_kit import Nevia
 from nevia_kit.testing import FakeApi
 from typer.testing import CliRunner
 
+from core.agent import ai
 from core.computer import bundled
-from core.doomed import Doomed
+from core.nevia import Nevia
 from m2p import agent as loop
 from m2p import local as cli
 from m2p import steps
@@ -39,14 +40,22 @@ def _exec_env(fake: FakeApi, needle: str) -> dict[str, str]:
 def test_run_passes_the_gateway_key_as_a_secret_template(agent: Loop, fake: FakeApi) -> None:
     agent.run()
     env = _exec_env(fake, "remote step loop 3")  # the sessions' job
-    c = agent.settings.copilot
-    assert env["COPILOT_PROVIDER_API_KEY"] == f"{{{{secrets.M2P_{c.gateway_secret}}}}}"
-    assert env["COPILOT_MODEL"] == c.model
-    assert env["COPILOT_OFFLINE"] == "true"
-    assert env["M2P_REASONING_EFFORT"] == c.reasoning_effort
+    ai = agent.settings.ai
+    assert env["ANTHROPIC_AUTH_TOKEN"] == f"{{{{secrets.M2P_{ai.gateway_secret}}}}}"  # Claude Code, the default
+    assert env["ANTHROPIC_BASE_URL"] == ai.claude.gateway_url
     script = next(s for s in fake.scripts() if "remote step loop 3" in s)
     assert f"timeout {agent.settings.agent.hours}h" in script
-    assert c.gateway_secret not in fake.env[fake.get("computers", agent.name)["id"]]
+    assert ai.gateway_secret not in fake.env[fake.get("computers", agent.name)["id"]]
+
+
+def test_run_with_copilot_passes_its_gateway(agent: Loop, fake: FakeApi) -> None:
+    s = agent.settings
+    agent.settings = s.model_copy(update={"ai": s.ai.model_copy(update={"engine": "copilot"})})
+    agent.run()
+    env = _exec_env(fake, "remote step loop 3")
+    assert env["COPILOT_PROVIDER_API_KEY"] == f"{{{{secrets.M2P_{s.ai.gateway_secret}}}}}"
+    assert env["COPILOT_MODEL"] == s.ai.copilot.model and env["COPILOT_OFFLINE"] == "true"
+    assert not any(k.startswith("ANTHROPIC_") for k in env)
 
 
 def test_run_refuses_while_the_agent_runs(agent: Loop, fake: FakeApi) -> None:
@@ -102,7 +111,8 @@ def test_the_guide_names_the_mongo2pg_release(agent: Loop, fake: FakeApi) -> Non
     assert "-c '\\c hello' -f tries/NAME/normalize.sql" in guide  # \\c after the URI, not -d, which replaces it
     assert "Such a table passes on its count alone" in guide
     assert "{" not in guide.replace("{{", "")  # every placeholder filled
-    assert set(loop.TOOLS) == {"branch.sh", "render.jq"}
+    assert set(loop.TOOLS) == {"branch.sh"}
+    assert all((agent.name, f"{agent.dir}/tools/{name}") in fake.files for name in ai.TOOLS)  # the renders, both
 
 
 def _targz(files: dict[str, bytes]) -> bytes:
@@ -118,7 +128,7 @@ def _targz(files: dict[str, bytes]) -> bytes:
 def test_collect_brings_the_results_here_without_uris(agent: Loop, fake: FakeApi, tmp_path) -> None:
     archive = _targz({
         "ATTEMPTS.md": b"# Attempts\nloaded postgres://avnadmin:s3cret@host:5432/hello\n",
-        "logs/session-1.log": b"19:21:31 usage: model=m input=7 cached=0 output=1\n",
+        "logs/session-1.log": b"19:21:31 says: loaded\n",
     })  # fmt: skip
     stage = (agent.name, ".nevia-agent/collect.tar.gz")
     fake.on_exec("tar -czf", lambda argv, body: fake.files.update({stage: archive}) or "")
@@ -152,11 +162,11 @@ _EVENTS = [
 
 
 def _render(log: Path) -> str:
-    """tools/render.jq over a session's raw output, as run-agent.sh pipes it."""
-    jq = Path(loop.__file__).parent / "scripts" / "render.jq"
-    core = Path(loop.__file__).parents[1] / "core" / "scripts"  # common.jq, which render.jq includes
-    args = ["jq", "-Rr", "-L", str(core), "-f", str(jq), str(log)]
-    return subprocess.run(args, capture_output=True, text=True, check=True).stdout
+    """tools/render-copilot.jq over a session's raw output, as `ai.session` pipes it, its times in UTC."""
+    core = Path(loop.__file__).parents[1] / "core" / "scripts"  # with common.jq, which it includes
+    args = ["jq", "-nRr", "-L", str(core), "-f", str(core / "render-copilot.jq"), str(log)]
+    env = os.environ | {"TZ": "UTC"}
+    return subprocess.run(args, capture_output=True, text=True, check=True, env=env).stdout
 
 
 @pytest.mark.skipif(not shutil.which("jq"), reason="jq runs on the agent computer")
@@ -316,7 +326,7 @@ def test_run_sends_this_repositorys_tools_first(agent: Loop, fake: FakeApi) -> N
 def test_the_sessions_refuse_to_start_without_their_renderer(agent: Loop, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(steps, "HOME", tmp_path)
     (tmp_path / agent.dir / "tools").mkdir(parents=True)
-    with pytest.raises(RuntimeError, match=r"tools/render\.jq is missing"):
+    with pytest.raises(RuntimeError, match=r"tools/render-claude\.jq is missing"):
         steps.loop(agent.settings, 1)
 
 
@@ -349,7 +359,7 @@ def test_status_prints_the_tries_and_the_latest_actions(monkeypatch) -> None:
 
 def _key_principal(fake: FakeApi, nevia: Nevia, name: str, description: str) -> str:
     """A private-key principal as the real API keeps it; the fake keeps its example's auth and name."""
-    pid = nevia.access.add_key_principal("editor", name=name, description=description)["access"]["principal"]["id"]
+    pid = nevia.kit.access.add_key_principal("editor", name=name, description=description)["access"]["principal"]["id"]
     fake.access[pid]["principal"].update(auth="private_key", name=name)
     return pid
 
@@ -360,7 +370,7 @@ def test_destroy_deletes_what_the_agent_made_and_nothing_else(agent: Loop, fake:
     fake.add("computers", "someone-elses")
     fake.add("databases", "m2p-try3")
     fake.add("databases", "other-db")
-    for name in (s.secret(s.postgres.secret), s.secret(s.copilot.gateway_secret), s.postgres.secret, "OTHER"):
+    for name in (s.secret(s.postgres.secret), s.secret(s.ai.gateway_secret), s.postgres.secret, "OTHER"):
         nevia.secrets.set(name, "x")
     doomed = agent.doomed()
     assert doomed.computers == [s.mongo.computer]  # the agent computer is your machine's to delete
@@ -372,32 +382,4 @@ def test_destroy_deletes_what_the_agent_made_and_nothing_else(agent: Loop, fake:
     assert fake.find("computers", s.agent.computer) is not None
     assert fake.find("databases", "other-db") is not None
     left = sorted(sec["name"] for sec in nevia.secrets.list())
-    assert left == sorted([s.secret(s.copilot.gateway_secret), s.postgres.secret, "OTHER"])
-
-
-def test_destroy_asks_first_then_the_agent_and_your_machine_delete(monkeypatch) -> None:
-    calls: list[str] = []
-
-    class Boot:
-        def doomed(self) -> Doomed:
-            return Doomed(["m2p-agent"], secrets=["M2P_AIVEN_AI_API_KEY"], principals=["p1"])
-
-        def teardown(self, _d: Doomed) -> None:
-            calls.append("teardown")
-
-    class Agent:
-        def bootstrap(self) -> Boot:
-            return Boot()
-
-        def doomed(self) -> Doomed:
-            return Doomed(["m2p-mongo"], databases=["m2p-pg"])
-
-        def destroy(self) -> None:
-            calls.append("destroy")
-
-    monkeypatch.setattr(cli, "_agent", Agent)
-    result = CliRunner().invoke(cli.app, ["destroy"], input="n\n")
-    assert "m2p-agent" in result.output and "m2p-mongo" in result.output and "m2p-pg" in result.output
-    assert not calls
-    assert CliRunner().invoke(cli.app, ["destroy", "--yes"]).exit_code == 0
-    assert calls == ["destroy", "teardown"]  # the agent's resources first, then the agent itself
+    assert left == sorted([s.secret(s.ai.gateway_secret), s.postgres.secret, "OTHER"])

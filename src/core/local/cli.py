@@ -2,18 +2,16 @@
 `agent acc` changes an app's code (its migration to Postgres, or a feature) and opens a pull request."""
 
 import typer
-from nevia_kit import NeviaError
-from rich.console import Console
 
 from acc import local as acc
 from core.local import env
-from core.shell import CommandError
+from core.nevia import NeviaError
+from core.shell import CommandError, out
 from m2p import local as m2p
 
 app = typer.Typer(no_args_is_help=True, help=__doc__, pretty_exceptions_show_locals=False)
 app.add_typer(m2p.app, name="m2p")
 app.add_typer(acc.app, name="acc")
-out = Console()
 
 
 def main() -> None:

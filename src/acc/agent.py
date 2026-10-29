@@ -1,5 +1,5 @@
-"""The agent: Claude Code on its own Nevia computer changes the app, and the change goes to a pull request once a
-sandbox has passed.
+"""The agent: an AI (`[ai] engine`) on its own Nevia computer changes the app, and the change goes to a pull
+request once a sandbox has passed.
 
 This runs on the agent computer: it makes the databases, the checkpoint and the sandbox with nevia-kit, and does
 the work itself (`acc.steps`); a step that needs a secret runs as a job (`agent acc remote step ...`), with the
@@ -20,30 +20,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-import rich.console
 import typer
-from nevia_kit import Nevia, NeviaError, Tunnels
+from nevia_kit import Tunnels
 from pydantic import BaseModel
 
 from acc import config, pr, steps
 from acc.computer import JOBS_DIR, Computer, redact, secret
-from acc.config import Settings
+from acc.config import AI_USER, Settings
 from acc.stack import CA_FILE, Kind, Stack, sandbox_name
 from acc.steps import CHECK
 from core.activity import events
-from core.agent import prompts
+from core.agent import ai, prompts
 from core.agent.build import Builder
-from core.computer import agent_command, bundled
+from core.computer import agent_command
 from core.config import BUILD_DIR
 from core.doomed import Doomed
-from core.shell import console
+from core.nevia import Nevia, NeviaError
+from core.shell import console, out
 
 RunKind = Literal["migrate", "task"]
 RUNS_DIR = BUILD_DIR / "acc-runs"
-TOOLS = ("render.jq",)  # in DIR/tools, read-only, with core's common.jq: how Claude's events are rendered
 STEPS: dict[RunKind, tuple[str, ...]] = {
-    "migrate": ("clone", "stack", "analysis", "claude", "build", "sandbox", "pr"),
-    "task": ("clone", "stack", "claude", "build", "sandbox", "feature-check", "pr"),
+    "migrate": ("clone", "stack", "analysis", "ai", "build", "sandbox", "pr"),
+    "task": ("clone", "stack", "ai", "build", "sandbox", "feature-check", "pr"),
 }
 ANALYSIS_LINK_SECONDS = 3600  # the agent's link to MongoDB, for mongo2pg infer only
 RUN_ID = re.compile(r"^\d{12}$")
@@ -53,7 +52,7 @@ CHECKPOINT = re.compile(r"acc-(\d{12})")  # of the app, for a run's sandbox
 
 
 def prompt(kind: RunKind, run_dir: str, task: str = "", *, repo: str = "", branch: str = "") -> str:
-    """Claude's task: the migration's, or the feature asked for wrapped in the task's. `{{...}}` are replaced as
+    """The AI's task: the migration's, or the feature asked for wrapped in the task's. `{{...}}` are replaced as
     text, the request last, so that its own braces stay as they are."""
     text = prompts.prompt("acc", "MIGRATE.md" if kind == "migrate" else "FEATURE.md")
     for key, value in {"REPO": repo, "BRANCH": branch, "RUN_DIR": run_dir, "CHECK": f"{run_dir}/{CHECK}"}.items():
@@ -61,17 +60,10 @@ def prompt(kind: RunKind, run_dir: str, task: str = "", *, repo: str = "", branc
     return text.replace("{{TASK}}", task.strip())
 
 
-def claude_env(s: Settings) -> dict[str, str]:
-    """What Claude's step gets in its env: the gateway and its key as a secret template, the gateway's model
-    names; its other settings come from agent.toml."""
-    c = s.claude
-    env: dict[str, str] = {}
-    if c.gateway_url:
-        env["ANTHROPIC_BASE_URL"] = c.gateway_url
-        env["ANTHROPIC_AUTH_TOKEN"] = secret(s.secret(c.gateway_secret))
-    for alias, model in c.gateway_models.model_dump().items():
-        if model:
-            env[f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"] = model
+def ai_env(s: Settings) -> dict[str, str]:
+    """What the AI's step gets in its env: the gateway and its key as a secret template (`core.agent.ai`); its
+    other settings come from agent.toml."""
+    env = ai.env(s.ai, s.secret(s.ai.gateway_secret))
     if tz := os.environ.get("TZ"):
         env["TZ"] = tz  # the orchestrator's, your machine's: the log's times as your clock reads them
     return env
@@ -148,7 +140,7 @@ class Agent:
 
     def __post_init__(self) -> None:
         self.stack = Stack(self.settings, self.nevia, self.poll)
-        self.tunnels = Tunnels(self.nevia, lifetime=ANALYSIS_LINK_SECONDS)
+        self.tunnels = Tunnels(self.nevia.kit, lifetime=ANALYSIS_LINK_SECONDS)
 
     @property
     def name(self) -> str:
@@ -178,25 +170,20 @@ class Agent:
     # ------------------------------------------------------------------ setup
 
     def setup(self) -> None:
-        """On the agent computer: its tools, JDK, Maven, psql, Claude Code for its own Unix user, mongo2pg, and the
+        """On the agent computer: its tools, JDK, Maven, psql, the AI for its own Unix user, mongo2pg, and the
         stack's passwords. The app's stack is a run's: each run recreates it from its clone. Safe to repeat."""
         Builder(self.settings.mongo2pg).install(steps.HOME / self.dir / "bin/mongo2pg")
         self.stack.passwords()
-        c = self.settings.claude
         self.upload_tools(self.computer())
         steps.setup(self.settings)
-        if not c.gateway_url:
-            console.log(f"log Claude Code in once, if not done: nevia shell {self.name}, then "
-                        f"sudo -iu {c.user} claude, and /login")  # fmt: skip
 
     def upload_tools(self, pc: Computer) -> None:
         """lib.sh, and the tools read-only, replaced as a whole so that tools an earlier version had go too."""
         t = f"~/{self.dir}/tools"
         pc.sh(f"chmod -R u+w {t} 2>/dev/null; rm -rf {t} && mkdir -p {t}")
         pc.put_lib()
-        for name in TOOLS:
-            pc.put(name, f"{self.dir}/tools/{name}", "444")
-        pc.upload(bundled("core", "scripts/common.jq"), f"{self.dir}/tools/common.jq", "444")
+        for name, data in ai.tools().items():
+            pc.upload(data, f"{self.dir}/tools/{name}", "444")
 
     # ------------------------------------------------------------------ the stack
 
@@ -307,12 +294,12 @@ class Agent:
         self.deploy_stack(f"{self.run_dir(st.id)}/repo", st.stack_kind)
 
     def _dev_db(self, run: str) -> tuple[str, str]:
-        """Claude's own empty Postgres for a migration, `<app>-db-<run>`, and the secret of its URI."""
+        """The AI's own empty Postgres for a migration, `<app>-db-<run>`, and the secret of its URI."""
         s = self.settings
         return f"{s.app.computer}-db-{run}", f"{s.secret(s.postgres.secret)}_DEV_{run}"
 
     def _dev_postgres(self, run: str) -> str:
-        """Claude's Postgres, made if need be, its CA in the run's directory; returns the secret of its URI."""
+        """The AI's Postgres, made if need be, its CA in the run's directory; returns the secret of its URI."""
         db, sec = self._dev_db(run)
         _, ca = self.stack.postgres_up(db, sec)
         self.computer().upload(ca.encode(), f"{self.run_dir(run)}/dev-ca.pem", "644")
@@ -332,23 +319,23 @@ class Agent:
         console.log(out.strip().splitlines()[-1])
         st.analysis = self.computer().sh(f"cat ~/{rd}/analysis/summary.md")
 
-    def _claude(self, st: RunState) -> None:
-        """Claude Code on the change, followed as it goes. A run taken up again follows the job still going,
-        takes the result of one that ended with one, and starts Claude again otherwise."""
-        pc, rd, job = self.computer(), self.run_dir(st.id), f"claude-{st.id}"
+    def _ai(self, st: RunState) -> None:
+        """The AI on the change, followed as it goes. A run taken up again follows the job still going, takes the
+        result of one that ended with one, and starts the AI again otherwise."""
+        pc, rd, job = self.computer(), self.run_dir(st.id), f"ai-{st.id}"
         has_result = pc.sh(f"test -s ~/{rd}/result.json && echo yes || true").strip() == "yes"
         if not pc.job_running(job) and not has_result:
             home = pc.sh("echo $HOME").strip()
-            env = claude_env(self.settings)
+            env = ai_env(self.settings)
             if st.kind == "migrate":
                 env |= {"DATABASE_URL": secret(self._dev_postgres(st.id)), "PG_CA_FILE": f"{home}/{rd}/dev-ca.pem"}
             text = prompt(st.kind, f"{home}/{rd}", st.task, repo=self.settings.repo.github,
                           branch=self.settings.repo.base_branch)  # fmt: skip
             pc.upload(text.encode(), f"{rd}/prompt.md")
-            # Claude runs as its own Unix user, with the clone and its work directory lent to it for the time:
+            # The AI runs as its own Unix user, with the clone and its work directory lent to it for the time:
             # the key file and this orchestrator's env are another user's, out of its reach.
-            pc.sh(f"mkdir -p ~/{rd}/work && sudo -n chown -R {self.settings.claude.user}: ~/{rd}/repo ~/{rd}/work")
-            cmd = agent_command("acc", "step", "claude", st.id)
+            pc.sh(f"mkdir -p ~/{rd}/work && sudo -n chown -R {AI_USER}: ~/{rd}/repo ~/{rd}/work")
+            cmd = agent_command("acc", "step", "ai", st.id)
             pc.start_job(job, f"timeout {self.settings.agent.hours}h {cmd}", env=env)
         seen = [0]
         try:
@@ -360,20 +347,22 @@ class Agent:
             if st.kind == "migrate":
                 self._drop_dev_db(st.id)
         if not (st.path / "result.json").is_file():
-            raise RuntimeError("Claude Code ended without a result: `agent acc run resume` starts it again")
+            raise RuntimeError(
+                f"{self.settings.ai.name} ended without a result: `agent acc run resume` starts it again"
+            )
         result = json.loads((st.path / "result.json").read_text())
-        st.title, st.text = pr.proposal(result)
-        self.show(f"Claude's proposal: {st.title}")
+        st.title, st.text = pr.proposal(result, self.settings.ai.name)
+        self.show(f"the AI's proposal: {st.title}")
         if not pc.sh(f"git -C ~/{rd}/repo status --porcelain").strip():
             self.show("no change proposed: no sandbox, no pull request")
             st.outcome = "no change"
             return
         if st.kind == "task" and not pc.sh(f"test -s ~/{rd}/{CHECK} && echo yes || true").strip():
-            raise RuntimeError(f"Claude wrote no feature check ({CHECK}): no sandbox, no pull request")
+            raise RuntimeError(f"the AI wrote no feature check ({CHECK}): no sandbox, no pull request")
 
     def activity(self, run: str, start: int = 0) -> list[str]:
-        """Claude's lines in the run's log (tools/render.jq's), from line `start` on."""
-        log = f"~/{self.run_dir(run)}/logs/claude.log"
+        """The AI's lines in the run's log (tools/render-<engine>.jq's), from line `start` on."""
+        log = f"~/{self.run_dir(run)}/logs/ai.log"
         out = self.computer().sh(f"test -f {log} && tail -n +{start + 1} {log} || true")
         return [redact(line) for line in out.splitlines()]
 
@@ -391,7 +380,7 @@ class Agent:
     def _drop_dev_db(self, run: str) -> None:
         db, sec = self._dev_db(run)
         if self.nevia.databases.exists(db):
-            console.log(f"deleting {db}, Claude's Postgres")
+            console.log(f"deleting {db}, the AI's Postgres")
             self.nevia.databases.delete(db)
         if any(s["name"] == sec for s in self.nevia.secrets.list()):
             self.nevia.secrets.delete(sec)
@@ -439,7 +428,7 @@ class Agent:
         self.show(f"sandbox: {st.sandbox_url}")
 
     def _feature_check(self, st: RunState) -> None:
-        """Claude's script on the sandbox, with nothing but PATH and HOME: no more than Claude itself could do."""
+        """The AI's script on the sandbox, with nothing but PATH and HOME: no more than the AI itself could do."""
         try:
             st.feature_log = steps.feature_check(self.settings, st.id, st.sandbox_url)
         except RuntimeError as err:
@@ -449,7 +438,7 @@ class Agent:
         s, pc, rd = self.settings, self.computer(), self.run_dir(st.id)
         v = pr.Validation(
             stack=s.app.computer, base_branch=s.repo.base_branch, sandbox=sandbox_name(s.app.computer, st.id),
-            checkpoint=f"acc-{st.id}", kind=st.new_kind, database=st.database, url=st.sandbox_url,
+            checkpoint=f"acc-{st.id}", kind=st.new_kind, database=st.database, url=st.sandbox_url, ai=s.ai.name,
             analysis=st.analysis,
             feature_check=pc.sh(f"cat ~/{rd}/{CHECK}") if st.kind == "task" else "", feature_log=st.feature_log,
         )  # fmt: skip
@@ -478,25 +467,29 @@ class Agent:
             left = ["(could not list them)"]
         r = pr.Report(
             run=st.id, kind=st.kind, repo=self.settings.repo.github, base_branch=self.settings.repo.base_branch,
-            started=st.started, outcome=st.outcome or "going", steps=list(st.durations.items()), pr_url=st.pr_url,
-            sandbox_url=st.sandbox_url, result=result, left=left,
+            started=st.started, outcome=st.outcome or "going", ai=self.settings.ai.name,
+            steps=list(st.durations.items()), pr_url=st.pr_url, sandbox_url=st.sandbox_url, result=result, left=left,
         )  # fmt: skip
         path = st.path / "report.md"
         path.write_text(pr.report(r))
-        cost = f", Claude ${float(result.get('total_cost_usd') or 0):.2f}" if result else ""
+        cost = (
+            f", {self.settings.ai.name} ${float(result['total_cost_usd']):.2f}"
+            if result and "total_cost_usd" in result
+            else ""
+        )
         console.log(f"report: {path.relative_to(BUILD_DIR.parent)} ({st.outcome or 'going'}{cost})")
         return path
 
-    def claude_running(self, run: str) -> bool:
-        return self.computer().job_running(f"claude-{run}")
+    def ai_running(self, run: str) -> bool:
+        return self.computer().job_running(f"ai-{run}")
 
     def stop(self) -> None:
-        """Stop Claude and the jobs of the run going on the agent computer; what it made stays (`clean`)."""
+        """Stop the AI and the jobs of the run going on the agent computer; what it made stays (`clean`)."""
         self.computer().sh(
             # [r]: the patterns must not match the shell running them. The jobs' wrappers still write the
             # exit code a `run` following them waits for.
             "pkill -f 'core acc remote [r]un' || true; pkill -f 'core acc remote [s]tep' || true; "
-            f"sudo -n pkill -u {self.settings.claude.user} || true"
+            f"sudo -n pkill -u {AI_USER} || true"
         )
         if st := self.unfinished():
             st.outcome = "stopped"
@@ -574,8 +567,7 @@ class Agent:
 # Your machine's commands (acc.local) run these there, through `agent acc remote`.
 
 remote = typer.Typer(no_args_is_help=True, hidden=True, help="On the agent computer: what the commands do there.")
-out = rich.console.Console(soft_wrap=True)
-LATEST = 15  # Claude's lines `status` shows
+LATEST = 15  # the AI's lines `status` shows
 
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask first.")]
 Mode = Literal["migrate", "task", "resume"]
@@ -631,8 +623,8 @@ def remote_status() -> None:
         for label, value in [("sandbox", st.sandbox_url), ("pull request", st.pr_url)]:
             if value:
                 out.print(f"{label}: {value}")
-        if "claude" not in st.done and (acts := events(ag.activity(st.id))):
-            out.rule("Claude's latest actions" + (" (running)" if ag.claude_running(st.id) else ""))
+        if "ai" not in st.done and (acts := events(ag.activity(st.id))):
+            out.rule("the AI's latest actions" + (" (running)" if ag.ai_running(st.id) else ""))
             for a in acts[-LATEST:]:
                 out.print(f"{a.time} {a.text}", markup=False, highlight=False, style="red" if a.failed else None)
     out.print(f"sandboxes: {', '.join(ag.doomed().computers) or 'none'}")
@@ -647,7 +639,7 @@ def remote_stop() -> None:
 def remote_clean(run: Annotated[str | None, typer.Option()] = None, yes: YesOpt = False) -> None:
     """Without --yes, what it would delete, as JSON."""
     ag = _here()
-    if (st := ag.unfinished()) and ag.claude_running(st.id) and run in {None, st.id}:
+    if (st := ag.unfinished()) and ag.ai_running(st.id) and run in {None, st.id}:
         raise typer.BadParameter(f"run {st.id} is going: agent acc stop first")
     d = ag.doomed(run)
     if yes:
@@ -668,7 +660,7 @@ def remote_destroy(yes: YesOpt = False) -> None:
 
 @remote.command("step")
 def remote_step(name: str, arg: str) -> None:
-    """A step that needs a secret, which this job's env holds: clone, analyse, claude, pr (`arg`: the run), or
+    """A step that needs a secret, which this job's env holds: clone, analyse, ai, pr (`arg`: the run), or
     pg-init (`arg`: the clone, under the home)."""
     s = config.load()
     match name:
@@ -676,8 +668,8 @@ def remote_step(name: str, arg: str) -> None:
             steps.clone(s, arg)
         case "analyse":
             steps.analyse(s, arg)
-        case "claude":
-            steps.claude(s, arg)
+        case "ai":
+            steps.ai_session(s, arg)
         case "pr":
             print(steps.open_pr(s, arg))  # noqa: T201 - read by the orchestrator
         case "pg-init":

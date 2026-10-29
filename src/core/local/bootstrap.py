@@ -10,13 +10,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from nevia_kit import Nevia
+import typer
 
 from core.computer import Computer, agent_command, bundled, secret
 from core.config import Runtime
 from core.doomed import Doomed
 from core.local import runtime
-from core.shell import console
+from core.nevia import Nevia
+from core.shell import console, show
 
 KEY_LIFETIME = 7 * 24 * 3600  # seconds; an agent's Nevia key expires a week after it is made
 
@@ -121,11 +122,14 @@ class Bootstrap:
         )
 
     def ship(self) -> None:
-        """This code, nevia-kit and agent.toml on the computer, installed by setup-runtime.sh."""
+        """This code, nevia-kit and agent.toml on the computer, installed by setup-runtime.sh with the nevia CLI,
+        signed in with the key file."""
         nv = self.nevia.computers
         nv.upload(self.name, runtime.bundle(), runtime.BUNDLE)
         nv.upload(self.name, bundled("core", "scripts/setup-runtime.sh"), f"{runtime.HOME}/setup-runtime.sh", "700")
-        out = self.computer.run_job("runtime", runtime.setup_command(self.runtime, self.name, self.key_path))
+        out = self.computer.run_job(
+            "runtime", runtime.setup_command(self.runtime, self.nevia.workspace, self.name, self.key_path)
+        )
         console.log(f"{self.name}: {out.strip().splitlines()[-1]}")
 
     # ------------------------------------------------------------------ the agent's own commands
@@ -148,6 +152,29 @@ class Bootstrap:
         names = [self.name_secret(w.name) for w in self.wanted] + [self.name_secret(self.key_secret)]
         computers = [self.name] if self.nevia.computers.exists(self.name) else []
         return Doomed(computers, secrets=[n for n in names if n in have], principals=self.principals())
+
+    def setup(self, env: dict[str, str]) -> None:
+        """`up`, then the agent's own setup on its computer (`agent <agent> remote setup`), its log shown as it
+        goes."""
+        self.up(env)
+        job = f"{self.agent}-setup"
+        self.remote_job(job, "setup")
+        self.computer.follow_job(job, show)
+
+    def destroy(self, *, yes: bool) -> None:
+        """Everything the agent made, then the agent computer, its key and secrets: listed first, and asked
+        (unless `yes`). The agent deletes its part (`agent <agent> remote destroy --yes`), your machine the rest."""
+        mine = self.doomed()
+        theirs = Doomed.from_json(self.remote("destroy")) if mine.computers else Doomed()
+        if not (mine or theirs):
+            show("nothing to delete")
+            return
+        show("\n".join((theirs + mine).lines()))
+        if not yes:
+            typer.confirm("Delete all of these? It can't be undone (collected runs in build/ stay)", abort=True)
+        if theirs:
+            show(self.remote("destroy", "--yes"))
+        self.teardown(mine)
 
     def teardown(self, d: Doomed) -> None:
         for name in d.computers:

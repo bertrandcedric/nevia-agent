@@ -1,4 +1,4 @@
-"""The agent loop: Copilot on its own computer works the migration out from upstream mongo2pg.
+"""The agent loop: an AI agent (`[ai] engine`) on its own computer works the migration out from upstream mongo2pg.
 
 Three resources: `mongo.computer` holds Mongo and the use case's data, `agent.computer` runs the agent, and
 the agent tries its loads on branches of `postgres.name`, kept until `clean`. mongo2pg is the release's binary,
@@ -12,13 +12,14 @@ from dataclasses import asdict, dataclass, field
 from typing import Annotated
 
 import typer
-from nevia_kit import Nevia, Tunnels
+from nevia_kit import Tunnels
 
 from core.activity import Activity, event
-from core.agent import prompts
+from core.agent import ai, prompts
 from core.agent.build import Builder
-from core.computer import agent_command, bundled
+from core.computer import agent_command
 from core.doomed import Doomed
+from core.nevia import Nevia
 from core.shell import console
 from m2p import config, steps, usecase
 from m2p.computer import JOBS_DIR, MONGO_CONTAINER, Computer
@@ -26,7 +27,7 @@ from m2p.config import Settings
 
 AGENT_JOB = "agent"
 # Copied to the agent computer's LOOP/tools; AGENTS.md goes to LOOP itself.
-TOOLS = ("branch.sh", "render.jq")  # the agent's, in LOOP/tools; no tool deletes a branch: `clean` does
+TOOLS = ("branch.sh",)  # the agent's, in LOOP/tools, with core.agent.ai's; no tool deletes a branch: `clean` does
 # What `clean` leaves in LOOP: what `setup` put there.
 CLEAN_KEEP = ("AGENTS.md", "tools", "bin", "mongo2pg")
 
@@ -38,13 +39,13 @@ SESSION_LINE = shlex.quote(r"^[0-9T:-]+Z session [0-9]+ (started|ended with [0-9
 
 def activity(lines: str) -> list[Activity]:
     """What the agent did, from the `NAME:N:HH:MM:SS text` lines `status` takes from a session log that
-    tools/render.jq wrote: its intents, commands, edits, messages, failures and errors.
+    tools/render-<engine>.jq wrote: its intents, commands, edits, messages, failures and errors.
     """
     out = []
     for line in lines.splitlines():
         if m := re.match(r"^([^:]+):(\d+):(\d\d:\d\d:\d\d) (.*)$", line):
             name, n, time_, text = m.groups()
-            out.append(event(f"{name}:{n}", time_, text[:300]))  # the times are Copilot's, in UTC
+            out.append(event(f"{name}:{n}", time_, text[:300]))  # the times are the agent computer's, in UTC
     return out
 
 
@@ -78,7 +79,7 @@ class Loop:
     tunnels: Tunnels = field(init=False)
 
     def __post_init__(self) -> None:
-        self.tunnels = Tunnels(self.nevia, lifetime=int(self.settings.agent.hours * 3600))
+        self.tunnels = Tunnels(self.nevia.kit, lifetime=int(self.settings.agent.hours * 3600))
 
     @property
     def name(self) -> str:
@@ -110,7 +111,6 @@ class Loop:
         pc = self.computer()
         self._upload_tools(pc)
         steps.setup(s)
-        self.install_cli(self.name)
         exists = f"SELECT 1 FROM pg_database WHERE datname = '{s.mongo.database}'"  # noqa: S608 - validated identifier
         if not pc.psql(exists).strip():
             pc.psql(f"CREATE DATABASE {s.mongo.database}")
@@ -134,7 +134,8 @@ class Loop:
         for name in TOOLS:
             pc.put(name, f"{self.dir}/tools/{name}", "555" if name.endswith(".sh") else "444")
         pc.upload(self._env_sh(), f"{self.dir}/tools/env.sh", "444")
-        pc.upload(bundled("core", "scripts/common.jq"), f"{self.dir}/tools/common.jq", "444")
+        for name, data in ai.tools().items():
+            pc.upload(data, f"{self.dir}/tools/{name}", "444")
         guide = prompts.prompt("m2p", "AGENTS.md").format(
             pg=s.postgres.name,
             mongo=s.mongo.computer,
@@ -161,12 +162,11 @@ class Loop:
         Every step checks what is already there, so a run that stopped halfway can be repeated, and
         data already there stays.
         """
-        st = self.settings.mongo
         if not self.nevia.computers.exists(name):
             self.nevia.computers.create(name)
         pc = self._on(name)
-        image = self.settings.images.mongo
-        pc.put_mongo({"MONGO_IMAGE": image, "MONGO_CACHE_GB": str(st.cache_gb), "MONGO_POD": "m2p",
+        image = self.settings.mongodb.image
+        pc.put_mongo({"MONGO_IMAGE": image, "MONGO_CACHE_GB": str(self.settings.mongodb.cache_gb), "MONGO_POD": "m2p",
                       "MONGO_CONTAINER": MONGO_CONTAINER})  # fmt: skip
         pc.mongo_up(image)
         db = self.settings.mongo.database
@@ -198,25 +198,6 @@ class Loop:
 
     # ------------------------------------------------------------------ the agent computer
 
-    def install_cli(self, name: str) -> None:
-        """Give a computer the nevia CLI, signed in with the key file `setup` put there (`agent.key_path`): the
-        agent loop makes and deletes its branches with it."""
-        a, n = self.settings.agent, self.settings.nevia
-        pc = self._on(name)
-        if not pc.sh("test -x ~/.local/bin/nevia && echo yes || true").strip():
-            pc.sh(
-                f"curl -fsSL https://get.nevia.cloud | NEVIA_VERSION={shlex.quote(n.cli_version)} "
-                'NEVIA_INSTALL_DIR="$HOME/.local/bin" sh >/dev/null'
-            )
-        q = shlex.quote(f"{pc.sh('echo $HOME').strip()}/{a.key_path}")
-        # Nevia reserves NEVIA_* in a computer's env, so the selection goes in the CLI's own config.
-        nv = "~/.local/bin/nevia --non-interactive"
-        version = pc.sh(
-            f"{nv} auth use-key-file {q} >/dev/null && {nv} workspace use {shlex.quote(n.workspace)} >/dev/null && "
-            f"{nv} --version && {nv} auth access-token >/dev/null && echo signed-in"
-        )
-        console.log(f"{name}: {' '.join(version.split())}")
-
     def link(self) -> None:
         """Mongo on the source computer at 127.0.0.1:27017 on the agent computer, unless a live link is there."""
         source = self.settings.mongo.computer
@@ -242,18 +223,9 @@ class Loop:
         # This repository's guide and tools, whatever an earlier setup sent.
         self._upload_tools(pc)
         self.link()
-        lp, c = self.settings.agent, self.settings.copilot
+        s, lp = self.settings, self.settings.agent
         pc.sh(f"date -u +%y%m%d%H%M%S > ~/{self.dir}/RUN")  # the run's id, for its results
-        env = {
-            "COPILOT_OFFLINE": "true",
-            "COPILOT_MODEL": c.model,
-            "M2P_REASONING_EFFORT": c.reasoning_effort,
-            "COPILOT_PROVIDER_BASE_URL": c.gateway_url,
-            "COPILOT_PROVIDER_API_KEY": f"{{{{secrets.{self.settings.secret(c.gateway_secret)}}}}}",
-            "COPILOT_PROVIDER_WIRE_API": c.wire_api,
-            "COPILOT_PROVIDER_MAX_PROMPT_TOKENS": str(c.max_prompt_tokens),
-            "COPILOT_PROVIDER_MAX_OUTPUT_TOKENS": str(c.max_output_tokens),
-        }
+        env = ai.env(s.ai, s.secret(s.ai.gateway_secret))
         loop = agent_command("m2p", "step", "loop", str(lp.sessions))  # the sessions, with the gateway key
         pc.start_job(AGENT_JOB, f"timeout {lp.hours}h {loop}", env=env)
 
@@ -266,7 +238,7 @@ class Loop:
             # The step itself, as bin/agent execs it: `.../python -m core m2p remote step loop N`. The wrapper's
             # `bash -lc timeout ...` must not match.
             "pkill -f '^[^ ]*python[^ ]* -m core m2p remote step [l]oop' || true; "
-            "pkill -x copilot || true; pkill -x mongo2pg || true"
+            "pkill -x claude || true; pkill -x copilot || true; pkill -x mongo2pg || true"
         )
         console.log(f"{self.name}: agent stopped")
 

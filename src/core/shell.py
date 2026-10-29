@@ -8,7 +8,16 @@ from pathlib import Path
 
 from rich.console import Console
 
-console = Console(stderr=True, log_path=False, soft_wrap=True)
+console = Console(stderr=True, log_path=False, soft_wrap=True)  # what the agents log as they go
+out = Console(soft_wrap=True)  # what a command answers
+
+
+def show(text: str) -> None:
+    """Text as it is (an agent's log, a remote command's output), no markup, no highlighting."""
+    if text.strip():
+        out.print(text.rstrip(), markup=False, highlight=False)
+
+
 _CREDENTIALS = re.compile(r"(://[^:/@\s]+:)[^@\s]+@")
 
 

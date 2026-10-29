@@ -6,8 +6,8 @@ source "$loop/tools/env.sh"
 n=${1:?usage: branch.sh N}
 [[ $n =~ ^[0-9]+$ ]] || { echo "N must be a number" >&2; exit 2; }
 name="m2p-try$n"
-nevia --non-interactive -y pg branch "$M2P_PG" -b "$name" --wait --timeout 15m >/dev/null
+nevia pg branch "$M2P_PG" -b "$name" --wait --timeout 15m >/dev/null
 umask 077
 mkdir -p "$loop/tries"
-nevia --non-interactive pg connect "$name" --uri > "$loop/tries/$name.uri"
+nevia pg connect "$name" --uri > "$loop/tries/$name.uri"
 echo "$loop/tries/$name.uri"

@@ -6,12 +6,13 @@ from nevia_kit.testing import FakeApi
 
 from acc.computer import Computer
 from core.local.collect import Collect, _script
+from tests.fake_nevia import on_fake
 
 
 def test_download_reads_again_after_an_exec_without_a_result(monkeypatch) -> None:
     fake = FakeApi(validate=True)
     fake.add("computers", "acc-agent")
-    nevia = fake.client()
+    nevia = on_fake(fake)
     pc = Computer("acc-agent", nevia, 0)
     answers: list[object] = [KeyError("result"), b"jar"]
 
@@ -32,7 +33,7 @@ def test_download_reads_again_after_an_exec_without_a_result(monkeypatch) -> Non
 def test_follow_job_shows_every_line_of_the_log_not_only_the_last() -> None:
     fake = FakeApi(validate=True)
     fake.add("computers", "m2p-agent")
-    pc = Computer("m2p-agent", fake.client(), 0)
+    pc = Computer("m2p-agent", on_fake(fake), 0)
     log = ["[seed] 5000 customers", "[seed]   bool-string: 4", "[seed]   date-string: 0", "agent ready"]
     polls = iter([2, 4])  # the log has grown to 2 lines at the first poll, 4 at the second
 
@@ -67,7 +68,7 @@ def test_collect_packs_the_dirs_the_extra_files_and_a_prepared_file_the_same_way
 def test_an_upload_here_replaces_a_read_only_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENT_COMPUTER", "acc-agent")
     monkeypatch.setenv("HOME", str(tmp_path))
-    pc = Computer("acc-agent", FakeApi(validate=True).client(), 0)
+    pc = Computer("acc-agent", on_fake(FakeApi(validate=True)), 0)
     guide = tmp_path / "loop" / "AGENTS.md"
     pc.upload(b"first", "loop/AGENTS.md", "444")
     pc.upload(b"second", "loop/AGENTS.md", "444")

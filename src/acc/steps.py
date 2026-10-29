@@ -1,4 +1,4 @@
-"""A run's work on the agent computer, the steps `acc.agent` runs: the clone, the mongo2pg analysis, Claude, the
+"""A run's work on the agent computer, the steps `acc.agent` runs: the clone, the mongo2pg analysis, the AI, the
 build, the seed data, the pull request, and the computer's setup.
 
 Each runs here, as a subprocess. The ones that need a secret (the GitHub token, the gateway key, a database's
@@ -11,14 +11,14 @@ import os
 import pwd
 import re
 import shutil
-import subprocess
 import urllib.parse
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from acc.config import Settings
+from acc.config import AI_USER, Settings
+from core.agent import ai
 from core.agent.host import HOME, lib, q, run
 from core.shell import console
 
@@ -38,7 +38,7 @@ def run_dir(s: Settings, rid: str) -> Path:
 
 
 def tools_env(s: Settings) -> dict[str, str]:
-    """This user's JDK and Maven on PATH, by absolute path, so that Claude's user finds them too."""
+    """This user's JDK and Maven on PATH, by absolute path, so that the AI's user finds them too."""
     d = HOME / s.agent.dir
     return {"JAVA_HOME": str(d / "jdk"), "PATH": f"{d}/maven/bin:{d}/jdk/bin:{os.environ.get('PATH', '')}"}
 
@@ -54,7 +54,7 @@ def git(*args: str, cwd: Path | None = None) -> str:
 
 def clone(s: Settings, rid: str) -> None:
     """The base branch into the run's `repo`, a Maven app with a database.kind; a dry-run push checks first
-    that the token may write `agent/<run>`, rather than after Claude's work."""
+    that the token may write `agent/<run>`, rather than after the AI's work."""
     r, repo = s.repo, run_dir(s, rid) / "repo"
     shutil.rmtree(repo, ignore_errors=True)
     git("clone", "-q", "--branch", r.base_branch, f"https://github.com/{r.github}.git", str(repo))
@@ -71,7 +71,7 @@ def clone(s: Settings, rid: str) -> None:
 
 
 def open_pr(s: Settings, rid: str) -> str:
-    """Claude's change committed on `agent/<run>`, pushed, and a pull request into the base branch, its title
+    """The AI's change committed on `agent/<run>`, pushed, and a pull request into the base branch, its title
     the first line of pr.md and its body the rest; its URL. Never on the base branch, never merged."""
     r, d = s.repo, run_dir(s, rid)
     branch, repo = f"agent/{rid}", d / "repo"
@@ -79,7 +79,7 @@ def open_pr(s: Settings, rid: str) -> str:
     git("checkout", "-q", "-B", branch, cwd=repo)
     git("add", "-A", cwd=repo)
     if run(["git", "status", "--porcelain"], cwd=repo).strip():
-        git("commit", "-q", "-m", title, "-m", "Proposed by Claude Code running on a Nevia computer.", cwd=repo)
+        git("commit", "-q", "-m", title, "-m", f"Proposed by {s.ai.name} running on a Nevia computer.", cwd=repo)
     git("push", "-q", "-f", "origin", f"HEAD:refs/heads/{branch}", cwd=repo)
     return pull_request(r.github, branch, r.base_branch, (d / "pr.md").read_text())
 
@@ -110,7 +110,7 @@ def pull_request(github: str, head: str, base: str, text: str, *, http: httpx.Cl
 
 
 def strip_values(out: Path) -> None:
-    """What Claude may read of an analysis: no sample value, in the schemas (`values`) or the infer warnings'
+    """What the AI may read of an analysis: no sample value, in the schemas (`values`) or the infer warnings'
     `examples:` (the lines under them, more indented or list items)."""
 
     def drop(node: Any) -> Any:
@@ -155,7 +155,7 @@ def summary(collections: Path) -> str:
 
 def analyse(s: Settings, rid: str) -> None:
     """mongo2pg init and infer on the app's MongoDB (MONGO_URI, through a link) into the run's `mongo2pg`, then
-    what Claude may read of it in `analysis/`, read-only, and its summary. The project goes: its config holds
+    what the AI may read of it in `analysis/`, read-only, and its summary. The project goes: its config holds
     the URIs, its HTML reports the values."""
     d, binary = run_dir(s, rid), HOME / s.agent.dir / "bin/mongo2pg"
     project, out = d / "mongo2pg", d / "analysis"
@@ -181,7 +181,7 @@ def analyse(s: Settings, rid: str) -> None:
     console.log(f"{sum(1 for p in (out / 'collections').iterdir() if p.is_dir())} collection(s) analysed")
 
 
-# ---------------------------------------------------------------------- Claude, the build, the seed data
+# ---------------------------------------------------------------------- the AI, the build, the seed data
 
 
 def pg_env(uri: str, ca_file: str) -> dict[str, str]:
@@ -194,56 +194,39 @@ def pg_env(uri: str, ca_file: str) -> dict[str, str]:
     }  # fmt: skip
 
 
-def claude_command(s: Settings, d: Path, env: dict[str, str]) -> list[str]:
-    """Claude Code headless, as its own Unix user (`claude.user`): it gets `env` (sudo keeps those names only),
-    not this user's files, its key file or its env."""
-    c = s.claude
-    user_home = Path(pwd.getpwnam(c.user).pw_dir)
+def ai_command(s: Settings, d: Path, env: dict[str, str]) -> list[str]:
+    """The AI headless, as its own Unix user (AI_USER): it gets `env` (sudo keeps those names only), not this
+    user's files, its key file or its env."""
+    user_home = Path(pwd.getpwnam(AI_USER).pw_dir)
     other = d / "analysis" if (d / "analysis").is_dir() else d / "work"
     keep = ",".join(sorted(env))
-    path = f"{user_home}/.local/bin:{tools_env(s)['PATH']}"
-    return [
-        "sudo", "-n", "-u", c.user, "-H", f"--preserve-env={keep}", "env", f"PATH={path}",
-        f"JAVA_HOME={tools_env(s)['JAVA_HOME']}", f"{user_home}/.local/bin/claude",
-        "-p", (d / "prompt.md").read_text(), "--output-format", "stream-json", "--verbose",
-        "--max-turns", str(c.max_turns), "--permission-mode", "acceptEdits",
-        "--tools", "Read,Edit,Write,Glob,Grep,Bash,KillShell", "--allowedTools", ",".join(c.allowed_tools),
-        "--effort", c.reasoning_effort, *(["--model", c.model] if c.model else []),
-        "--add-dir", str(other), "--add-dir", "/tmp",  # noqa: S108 - Claude's scratch space, as before
-    ]  # fmt: skip
+    path = f"{user_home}/{ai.BIN}:{tools_env(s)['PATH']}"
+    cmd = ai.command(s.ai, (d / "prompt.md").read_text(), home=user_home, allowed=s.agent.allowed_tools,
+                     dirs=(other, Path("/tmp")))  # fmt: skip  # noqa: S108 - its scratch space
+    return ["sudo", "-n", "-u", AI_USER, "-H", f"--preserve-env={keep}", "env", f"PATH={path}",
+            f"JAVA_HOME={tools_env(s)['JAVA_HOME']}", *cmd]  # fmt: skip
 
 
-def claude(s: Settings, rid: str) -> None:
-    """Claude Code on the clone: its events into stream.jsonl, rendered by render.jq into logs/claude.log as they
-    come, its final result into result.json. Its env: this step's (the gateway, the models, a migration's
-    DATABASE_URL and PG_CA_FILE, and their PG* variables)."""
-    d, tools = run_dir(s, rid), HOME / s.agent.dir / "tools"
+def ai_session(s: Settings, rid: str) -> None:
+    """The AI on the clone: its events rendered into logs/ai.log as they come (and kept in ai.jsonl), its result
+    into result.json. Its env: this step's (the gateway, a migration's DATABASE_URL and PG_CA_FILE,
+    and their PG* variables)."""
+    d = run_dir(s, rid)
     (d / "work").mkdir(exist_ok=True)
     (d / "logs").mkdir(exist_ok=True)
-    names = ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "DATABASE_URL", "PG_CA_FILE", "TZ")
-    env = {k: os.environ[k] for k in names if k in os.environ}
-    env |= {k: v for k, v in os.environ.items() if k.startswith("ANTHROPIC_DEFAULT_")}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.startswith(ai.ENV_PREFIXES) or k in {"DATABASE_URL", "PG_CA_FILE", "TZ"}
+    }
     if "DATABASE_URL" in env:
         env |= pg_env(env["DATABASE_URL"], env["PG_CA_FILE"])
-    log, err = (d / "logs/claude.log").open("a"), (d / "logs/claude.err").open("a")
-    with log, err, (d / "stream.jsonl").open("w") as stream:
-        render = subprocess.Popen(["jq", "--unbuffered", "-nRr", "-L", str(tools), "-f", str(tools / "render.jq")],
-                                  stdin=subprocess.PIPE, stdout=log, text=True)  # fmt: skip
-        claude_ = subprocess.Popen(claude_command(s, d, env), cwd=d / "repo", env=os.environ | env,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, text=True)  # fmt: skip
-        if not (claude_.stdout and render.stdin):
-            raise RuntimeError("no pipe to Claude Code or render.jq")
-        for line in claude_.stdout:
-            stream.write(line)
-            render.stdin.write(line)
-            render.stdin.flush()
-        render.stdin.close()
-        rc = claude_.wait()
-        render.wait()
-    results = [ln for ln in (d / "stream.jsonl").read_text().splitlines() if '"type":"result"' in ln.replace(" ", "")]
-    if not results:
-        raise RuntimeError(f"Claude Code ended with {rc}, without a result: {err.name}")
-    (d / "result.json").write_text(results[-1] + "\n")
+    log, render = d / "logs/ai.log", HOME / s.agent.dir / "tools" / ai.render(s.ai)
+    rc = ai.session(ai_command(s, d, env), cwd=d / "repo", env=os.environ | env, render=render, log=log)
+    result = ai.result(s.ai, log.with_suffix(".jsonl").read_text().splitlines())
+    if result is None:
+        raise RuntimeError(f"{s.ai.name} ended with {rc}, without a result: {log}")
+    (d / "result.json").write_text(json.dumps(result) + "\n")
 
 
 def app_jar(repo: Path) -> Path:
@@ -274,7 +257,7 @@ def pg_init(repo: Path) -> None:
 
 
 def feature_check(s: Settings, rid: str, url: str) -> str:
-    """Claude's feature check against the sandbox, with nothing but PATH and HOME: no more than Claude could."""
+    """The AI's feature check against the sandbox, with nothing but PATH and HOME: no more than the AI could."""
     d = run_dir(s, rid)
     return run(["env", "-i", f"PATH={os.environ['PATH']}", f"HOME={d / 'work'}", "sh", str(d / CHECK), url])
 
@@ -283,25 +266,35 @@ def feature_check(s: Settings, rid: str, url: str) -> str:
 
 
 def setup(s: Settings) -> None:
-    """git, jq, psql and python3; the JDK and Maven (lib.sh's install_java, as on the app's computer); Claude
-    Code for its own Unix user, which can use the JDK, Maven and tools here, but not this user's files."""
-    d, a, c = HOME / s.agent.dir, s.app, s.claude
+    """git, jq, psql and python3; the JDK and Maven (lib.sh's install_java, as on the app's computer); the AI
+    (`core.agent.ai`) for its own Unix user, which can use the JDK, Maven and tools here, but not this user's
+    files."""
+    d, a = HOME / s.agent.dir, s.app
     for sub in ("bin", "tools", "runs"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     lib("apt_install git jq curl postgresql-client python3")
     lib(f"install_java {q(d, str(a.jdk), a.maven)}")
     try:
-        pwd.getpwnam(c.user)
+        pwd.getpwnam(AI_USER)
     except KeyError:
-        console.log(f"creating user {c.user}")
-        run(["sudo", "-n", "useradd", "-m", "-s", "/bin/bash", c.user])
+        console.log(f"creating user {AI_USER}")
+        run(["sudo", "-n", "useradd", "-m", "-s", "/bin/bash", AI_USER])
     run(["chmod", "o+x", str(HOME), str(d), str(d / "runs")])
     run(["chmod", "-R", "o+rX", str(d / "jdk"), str(d / "maven"), str(d / "tools")])
+    lend_nevia(s)
+    console.log(f"agent ready: {s.ai.name} {ai.install(s.ai, s.agent.computer, AI_USER)} as {AI_USER}")
 
-    def as_claude(cmd: str) -> str:
-        return run(["sudo", "-n", "-u", c.user, "-H", "bash", "-lc", cmd])
 
-    have = re.match(r"[0-9][0-9.]*", as_claude("~/.local/bin/claude --version 2>/dev/null || true"))
-    if not have or (c.version not in {"stable", "latest"} and have[0] != c.version):
-        as_claude(f"curl -fsSL https://claude.ai/install.sh | bash -s {q(c.version)} >/dev/null")
-    console.log(f"agent ready: Claude Code {as_claude('~/.local/bin/claude --version').strip()} as {c.user}")
+def lend_nevia(s: Settings) -> None:
+    """The nevia CLI for the AI's user too, signed in with a copy of the agent's key file (mode 600, its own):
+    the AI drives Nevia as the agent does. Again at each setup, so that a new key reaches it."""
+    home = Path(pwd.getpwnam(AI_USER).pw_dir)
+    key = home / s.agent.key_path
+    for src, dest, mode in (
+        (HOME / ai.BIN / "nevia", home / ai.BIN / "nevia", "755"),
+        (HOME / s.agent.key_path, key, "600"),
+    ):
+        run(["sudo", "-n", "install", "-D", "-o", AI_USER, "-g", AI_USER, "-m", mode, str(src), str(dest)])
+    nv = f"~/{ai.BIN}/nevia"
+    signs_in = f"{nv} auth use-key-file {q(key)} >/dev/null && {nv} workspace use {q(s.nevia.workspace)} >/dev/null"
+    run(["sudo", "-n", "-u", AI_USER, "-H", "bash", "-lc", signs_in])

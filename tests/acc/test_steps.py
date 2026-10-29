@@ -39,16 +39,17 @@ def test_pg_env_decodes_the_uri() -> None:
                    "PGDATABASE": "hello", "PGSSLMODE": "verify-full", "PGSSLROOTCERT": "/ca.pem"}  # fmt: skip
 
 
-def test_claude_runs_as_its_user_with_the_names_of_its_env_not_their_values(
+def test_the_ai_runs_as_its_user_with_the_names_of_its_env_not_their_values(
     settings: Settings, tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-claude"})())
+    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-ai"})())
     (tmp_path / "prompt.md").write_text("the task")
-    cmd = steps.claude_command(settings, tmp_path, {"ANTHROPIC_AUTH_TOKEN": "s3cr3t", "PGPASSWORD": "pw"})
-    assert cmd[:5] == ["sudo", "-n", "-u", "acc-claude", "-H"]
+    cmd = steps.ai_command(settings, tmp_path, {"ANTHROPIC_AUTH_TOKEN": "s3cr3t", "PGPASSWORD": "pw"})
+    assert cmd[:5] == ["sudo", "-n", "-u", "acc-ai", "-H"]
     assert "--preserve-env=ANTHROPIC_AUTH_TOKEN,PGPASSWORD" in cmd
     assert "s3cr3t" not in " ".join(cmd) and "pw" not in cmd  # in the env sudo keeps, never in the command line
-    assert "/home/acc-claude/.local/bin/claude" in cmd and "the task" in cmd
+    assert "/home/acc-ai/.local/bin/claude" in cmd and "the task" in cmd
+    assert cmd[cmd.index("--allowedTools") + 1] == ",".join(settings.agent.allowed_tools)
 
 
 def test_app_jar_is_the_runnable_one(tmp_path: Path) -> None:
@@ -98,3 +99,18 @@ def test_the_pull_request_follows_a_redirect_and_finds_an_open_one(monkeypatch) 
 
     with pytest.raises(RuntimeError, match=r"403 .*not accessible"):
         steps.pull_request("o/r", "agent/1", "main", "T\nB", http=_github(refused))
+
+
+def test_the_ai_gets_the_cli_and_a_copy_of_the_key_of_its_own(settings: Settings, monkeypatch) -> None:
+    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-ai"})())
+    ran: list[list[str]] = []
+    monkeypatch.setattr(steps, "run", lambda args, **_kw: ran.append(args) or "")
+    steps.lend_nevia(settings)
+    key = f"/home/acc-ai/{settings.agent.key_path}"
+    assert ran[0][-4:] == ["-m", "755", f"{steps.HOME}/.local/bin/nevia", "/home/acc-ai/.local/bin/nevia"]
+    assert ran[1][:3] == ["sudo", "-n", "install"] and ran[1][-3:] == [
+        "600",
+        f"{steps.HOME}/{settings.agent.key_path}",
+        key,
+    ]
+    assert f"auth use-key-file {key}" in ran[2][-1] and "workspace use default" in ran[2][-1]

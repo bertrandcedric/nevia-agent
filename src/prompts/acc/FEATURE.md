@@ -16,6 +16,8 @@ The request, from the application's owner:
 - **No database**: test with unit tests; the sandbox is the end-to-end test.
 - **Your tools**: files with Read, Edit and Write; a shell with `mvn`, `java`, `curl` and the usual read-only
   commands. You run as your own user, in this run's directory and `/tmp`.
+- **`nevia`**: the Nevia CLI, signed in for this workspace, as the pipeline is. `nevia --help` lists what it
+  can do, e.g. `nevia ls`, `nevia pg ls`, `nevia exec <computer> -- <command>`.
 
 ## Commands
 
@@ -73,3 +75,5 @@ the commands you ran and what they returned, and what the feature check verifies
 - Write files with the Write and Edit tools, not shell heredocs or scripts that write them; run one command
   per Bash call, without `&&` or `;` chains: the others ask for an approval nobody gives here.
 - Change only the repository and the feature check.
+- Don't create, change or delete anything on Nevia with `nevia`: the pipeline makes and deletes the stack, the
+  sandbox and the databases. Look only.

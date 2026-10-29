@@ -1,21 +1,24 @@
-"""acc's settings: `[nevia]` and `[mongo2pg]` of `agent.toml`, and its `[acc]` table."""
+"""acc's settings: the shared sections of `agent.toml`, and its `[acc]` table."""
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar
 
 from pydantic import StringConstraints
 
-from core.config import CONFIG_FILE, AgentSettings, Images, Mongo2pg, Nevia, Runtime, Section, read
+from core.config import CONFIG_FILE, AgentComputer, AgentSettings, Ai, Mongo2pg, MongoDB, Nevia, Runtime, Section, read
 
 # Names that end up in shell commands and Nevia names.
 Name = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]*$")]
-SecretName = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
+# The Unix user the AI runs as on the agent computer: the orchestrator's env and secrets are out of its reach; it
+# gets the nevia CLI with a copy of the agent's key (steps.lend_nevia).
+AI_USER = "acc-ai"
 
 
 class Repo(Section):
+    token_secret: ClassVar[str] = "GITHUB_TOKEN"  # noqa: S105 - a name; from .env, into ACC_GITHUB_TOKEN
+
     github: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
     base_branch: str
-    token_secret: SecretName
 
     @property
     def name(self) -> str:
@@ -30,48 +33,30 @@ class App(Section):
 
 
 class Mongo(Section):
+    user: ClassVar[str] = "admin"
+    password_secret: ClassVar[str] = "MONGO_ROOT_PASSWORD"  # noqa: S105 - a name; random, made by setup
+
     computer: Name
     database: Annotated[str, StringConstraints(pattern=r"^[a-z_][a-z0-9_]*$")]
-    cache_gb: float
-    user: str
-    password_secret: SecretName
 
 
 class Chisel(Section):
+    user: ClassVar[str] = "tunnel"
+    password_secret: ClassVar[str] = "CHISEL_PASSWORD"  # noqa: S105 - a name; random, made by setup
+
     version: str
-    user: str
-    password_secret: SecretName
 
 
 class Postgres(Section):
+    secret: ClassVar[str] = "DATABASE_URL"  # noqa: S105 - a name: its URI's; a sandbox's is <secret>_<run>
+
     name: Name
-    secret: SecretName
 
 
-class Agent(Section):
+class Agent(AgentComputer):
     computer: Name
     dir: Name
-    hours: float
-    secret: SecretName
-    key_path: str
-
-
-class GatewayModels(Section):
-    opus: str = ""
-    sonnet: str = ""
-    haiku: str = ""
-
-
-class Claude(Section):
-    user: Name
-    version: str
-    gateway_url: str
-    gateway_secret: SecretName
-    model: str
-    gateway_models: GatewayModels
-    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"]  # what Claude Code's --effort takes
-    max_turns: int
-    allowed_tools: list[str]
+    allowed_tools: list[str]  # what Claude Code may use without asking
 
 
 class Settings(AgentSettings):
@@ -80,7 +65,8 @@ class Settings(AgentSettings):
 
     nevia: Nevia
     runtime: Runtime
-    images: Images
+    ai: Ai
+    mongodb: MongoDB
     repo: Repo
     app: App
     mongo: Mongo
@@ -88,7 +74,6 @@ class Settings(AgentSettings):
     postgres: Postgres
     mongo2pg: Mongo2pg
     agent: Agent
-    claude: Claude
 
 
 def load(path: Path = CONFIG_FILE) -> Settings:

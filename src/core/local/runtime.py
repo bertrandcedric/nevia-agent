@@ -86,7 +86,6 @@ def bundle() -> bytes:
     return buf.getvalue()
 
 
-def setup_command(runtime: Runtime, computer: str, key_path: str) -> str:
-    return " ".join(
-        ["bash", f"~/{HOME}/setup-runtime.sh", *map(shlex.quote, [runtime.uv, runtime.python, computer, key_path])]
-    )
+def setup_command(runtime: Runtime, workspace: str, computer: str, key_path: str) -> str:
+    args = [runtime.uv, runtime.python, runtime.nevia, workspace, computer, key_path]
+    return " ".join(["bash", f"~/{HOME}/setup-runtime.sh", *map(shlex.quote, args)])

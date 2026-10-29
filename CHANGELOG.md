@@ -7,6 +7,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Both agents drive Nevia with the `nevia` CLI (`core.nevia`), on your machine (`nevia login`) and on their
+  computers (`[runtime] nevia`, installed by the runtime's setup and signed in with the agent's key), instead of
+  nevia-kit, which only does the tunnels now. acc's AI gets the CLI too, with a copy of the key, to look at
+  Nevia. `[nevia] cli_version` is now `[runtime] nevia`, `0.1.13`.
+- One AI engine for both agents, `[ai] engine`: Claude Code (the default, `claude-sonnet-5-5`) or GitHub
+  Copilot CLI, through the Aiven AI gateway (`core.agent.ai`: install, env, command, render, result); m2p
+  used to run Copilot only, acc Claude only. acc's step `claude` is now `ai`, its Unix user `acc-ai`, its log
+  `logs/ai.log`; both renders are `core/scripts/render-claude.jq` and `render-copilot.jq`.
+- `agent.toml` holds only what you may choose: `[ai]` and `[mongodb]` (image, cache) are shared, and secret
+  names, `key_path`, MongoDB's and chisel's users and Claude's user are conventions in the code.
+  `gateway_models` is gone.
+
+### Removed
+
+- m2p's Copilot cost (`usage.py`, `price_*`, the token table at the end of `run`).
+
 - One project for both agents, nevia-agent: m2p (from nevia-mongo-to-pg) and acc (this repository's uc2,
   rewritten), under one CLI, `agent m2p ...` and `agent acc ...`, with one `agent.toml` (`[nevia]` and
   `[mongo2pg]` shared, then `[m2p.*]` and `[acc.*]`) and shared code in `core`: settings, the

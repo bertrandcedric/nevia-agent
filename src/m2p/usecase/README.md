@@ -54,7 +54,7 @@ PostgreSQL: `m2p-pg`, or an `m2p-tryN` branch. The URI holds the password, so ke
 and shell history:
 
 ```sh
-psql "$(nevia --non-interactive pg connect m2p-pg --uri)"
+psql "$(nevia pg connect m2p-pg --uri)"
 ```
 
 then `\c hello` and `SET search_path = hello;` before the queries below.

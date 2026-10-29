@@ -1,9 +1,6 @@
-# Claude Code's stream-json events, one per input line, as readable lines for logs/claude.log, in the
-# vocabulary of common.jq (`HH:MM:SS kind: text`, the time in TZ); lines that are not JSON (Claude Code's
-# stderr) pass through as they are. Run as: jq --unbuffered -nRr -L TOOLS -f render.jq
+# Claude Code's stream-json events, one per input line, in common.jq's vocabulary.
 include "common";
 
-def at: now | localtime | strftime("%H:%M:%S");
 def tool:
   .input as $i |
   if .name == "Bash" then "$ \($i.command // "" | command)"
