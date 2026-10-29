@@ -1,5 +1,0 @@
-The data of a Rocket.Chat 8.7 server (users, rooms, subscriptions, messages with threads,
-reactions, attachments, settings and Rocket.Chat's internal collections), in MongoDB 8.0 (replica
-set rs0) on this computer. Rocket.Chat is stopped and MongoDB's TTL expiry is off from analyse to
-the end of the migration: the data does not change (instances and rocketchat_notification_queue
-have TTL indexes, so their counts would drift otherwise).

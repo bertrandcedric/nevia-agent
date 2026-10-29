@@ -1,4 +1,0 @@
-- Rocket.Chat checks, in checks.mjs (run by verify.mjs): messages per room (rocketchat_message
-  grouped by rid), thread replies (messages with tmid) per thread, subscriptions per user, users
-  by role: the same in both.
-- A polymorphic field (e.g. the value of rocketchat_settings) may become JSONB: say where.
