@@ -58,7 +58,7 @@ when to merge and when to cut over.
 
 ## Setup
 
-Prerequisites: `uv`, `curl`, a Nevia workspace (`nevia login`, or `NEVIA_TOKEN` / `NEVIA_KEY_FILE`), SSH access
+Prerequisites: `uv`, `curl`, a Nevia workspace (and `nevia login`), SSH access
 to [aiven/nevia-kit](https://github.com/aiven/nevia-kit), an Aiven AI gateway key, and for acc a GitHub
 fine-grained token on the app's repository (*Contents* and *Pull requests*: read and write).
 

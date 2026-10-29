@@ -1,4 +1,4 @@
-"""`.env` at the repository root: the secrets the agents need (AIVEN_AI_API_KEY, GITHUB_TOKEN, NEVIA_TOKEN...),
+"""`.env` at the repository root: the secrets the agents need (AIVEN_AI_API_KEY, GITHUB_TOKEN),
 kept out of git. `.env.example` lists them."""
 
 import os

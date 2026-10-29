@@ -1,7 +1,6 @@
 """`agent.toml` at the repository root: the sections both agents share, `[nevia]` and `[mongo2pg]`, then one
 table per agent, `[m2p]` and `[acc]`, which each agent's own settings read."""
 
-import os
 import tomllib
 from pathlib import Path
 from typing import Annotated, Any, ClassVar
@@ -10,8 +9,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = ROOT / "build"  # your machine's results, and on an agent computer mongo2pg's binary and runs' state
-# AGENT_CONFIG points at another settings file, e.g. to run under separate resource names.
-CONFIG_FILE = Path(os.environ.get("AGENT_CONFIG") or ROOT / "agent.toml")
+CONFIG_FILE = ROOT / "agent.toml"
 
 
 class Section(BaseModel):
