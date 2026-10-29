@@ -1,0 +1,22 @@
+minimum_prek_version = "0.5.7"
+default_install_hook_types = ["pre-commit"]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "check-toml" },
+  { id = "check-merge-conflict" },
+  { id = "check-added-large-files", args = ["--maxkb=1024"] },
+]
+
+# Ruff and ty run from the project environment so their versions come from uv.lock.
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "ruff-format", name = "ruff format", language = "system", entry = "uv run ruff format", types = ["python"] },
+  { id = "ruff-check", name = "ruff check", language = "system", entry = "uv run ruff check --fix", types = ["python"] },
+  { id = "ty", name = "ty check", language = "system", entry = "uv run ty check", pass_filenames = false, types = ["python"] },
+  { id = "bash-syntax", name = "bash -n", language = "system", entry = "bash -n", types = ["shell"] },
+]

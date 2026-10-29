@@ -1,0 +1,133 @@
+# Settings for both agents. Names refer to Nevia resources in `nevia.workspace`. Everything an agent makes
+# there carries its name: resources m2p-... or acc-... (checked when this file is read), workspace secrets
+# M2P_... or ACC_... (the names below, prefixed). No secret here: `.env` has the values `setup` reads.
+
+[nevia]
+workspace = "default"
+cli_version = "0.1.12"   # the nevia CLI installed on m2p's agent computer
+
+[runtime]
+# The agents' own code runs on their computers: your machine only makes the agent computer, its key and the
+# secrets, then sends this code there, where uv installs this Python and the dependencies.
+uv = "0.13.6"
+python = "3.15"
+
+[images]
+# The MongoDB both agents run, in a Podman pod on their MongoDB computer (core/mongo-up.sh).
+mongo = "docker.io/library/mongo:8.0.34"
+
+[mongo2pg]
+# The release both agents run: m2p loads with it, acc analyses the app's data with it.
+repo = "https://github.com/pmpetit/mongo2pg.git"
+release = "mongo2pg-v0.8.0"   # its linux-x86_64 binary, checked against GitHub's sha256
+
+# ======================================================================================================
+# m2p: an agent loop works out how to load the hello MongoDB into PostgreSQL with mongo2pg.
+# ======================================================================================================
+[m2p.mongo]
+# The source: a computer running MongoDB with the use case's data.
+computer = "m2p-mongo"
+database = "hello"       # also the Postgres database and schema mongo2pg loads into
+cache_gb = 0.25          # WiredTiger's cache: uncapped, mongod outgrows a 2 GiB computer
+
+[m2p.seed]
+# What seed.py generates on the source computer when its MongoDB is empty; the same values give the
+# same documents. `python src/m2p/usecase/seed.py --help` describes them.
+customers = 5000
+seed = 42
+strange = 0.5              # percent of customers with anomalies of `strange_kinds` (0.1 of 5000 is 4 or 5: too few for every kind)
+strange_kinds = ["date-string", "bool-string"]   # [] for none, ["all"], or some of seed.py's kinds
+
+[m2p.postgres]
+# The target.
+name = "m2p-pg"
+secret = "PG_URL"        # workspace secret M2P_PG_URL holding its URI, DATABASE_URL on the agent computer
+
+[m2p.agent]
+computer = "m2p-agent"
+dir = "loop"             # its working directory, under the computer user's home
+hours = 1                # how long a run may take
+sessions = 3             # Copilot sessions in a run, if one stops before DONE.md
+secret = "NEVIA_AGENT_KEY"                       # workspace secret M2P_NEVIA_AGENT_KEY holding its Nevia key file
+key_path = ".config/nevia/keys/m2p-agent.json"   # where that key goes, under the home
+
+[m2p.copilot]
+version = "1.0.104"
+# npm's integrity for @github/copilot-linux-x64, checked before installing.
+integrity = "sha512-HGxTAkwrlzIAoQRQ25uWoKToujHzmO1sKC0qGP/yQTv8UhWufHYGHKkHj4sjEbHhRqwXfZvcUzKL9t/vUtklFg=="
+gateway_url = "https://ai.aiven.io/v1"   # the Aiven AI gateway, OpenAI-compatible
+gateway_secret = "AIVEN_AI_API_KEY"      # the env var setup reads, into the workspace secret M2P_AIVEN_AI_API_KEY
+model = "gpt-6.1-sol"
+reasoning_effort = "medium"   # none to max: lower is faster per turn, but may need more tries
+wire_api = "responses"
+max_prompt_tokens = 400000
+max_output_tokens = 64000
+# US dollars per million tokens, for the cost `run` prints; 0 until set.
+price_input = 0.0
+price_cached_input = 0.0
+price_output = 0.0
+# ======================================================================================================
+# acc: Claude Code changes an app (its migration to Postgres, or a feature) and opens a pull request.
+# ======================================================================================================
+
+[acc.repo]
+# The app the agent changes: a Maven project whose application.properties has database.kind = mongo or
+# postgres. It never pushes to base_branch and never merges.
+github = "bertrandcedric/nevia-helloworld"
+base_branch = "main"
+token_secret = "GITHUB_TOKEN"   # fine-grained, this repo only: Contents and Pull requests, read and write
+
+[acc.app]
+# The app's own computer, rebuilt from base_branch at each run; a run's sandbox is <computer>-<run>.
+computer = "acc-app"
+port = 8080
+jdk = 21
+maven = "3.9.12"
+
+[acc.mongo]
+# The app's MongoDB, with its seed data (local/mongo-init/*.js); a run's fork is <computer>-<run>.
+computer = "acc-mongo"
+database = "hello"
+cache_gb = 0.25          # WiredTiger's cache: Nevia computers have 2 GiB and no swap
+user = "admin"
+password_secret = "MONGO_ROOT_PASSWORD"
+
+[acc.chisel]
+# How the app reaches MongoDB: Nevia publishes HTTPS only, and the link outlives any run.
+version = "1.10.1"
+user = "tunnel"
+password_secret = "CHISEL_PASSWORD"
+
+[acc.postgres]
+# The app's Postgres once it runs on one; a sandbox's is <name>-<run>, its URI in <secret>_<run>.
+name = "acc-pg"
+secret = "DATABASE_URL"
+
+[acc.agent]
+computer = "acc-agent"
+dir = "acc"              # its working directory, under the computer user's home
+hours = 2                # how long Claude may take
+secret = "NEVIA_AGENT_KEY"                       # workspace secret ACC_NEVIA_AGENT_KEY holding its Nevia key file
+key_path = ".config/nevia/keys/acc-agent.json"   # where that key goes, under the home: Claude can't read it
+
+[acc.claude]
+user = "acc-claude"      # the Unix user Claude runs as on acc-agent: the Nevia key and the orchestrator are out of its reach
+# Claude Code's native installer: stable, latest or a version.
+version = "stable"
+# The Aiven AI gateway, as nevia-mongo-to-pg's [copilot] has it: Claude Code's ANTHROPIC_BASE_URL (it must
+# serve Anthropic's Messages API there, /v1/messages), and its key. Empty gateway_url: log Claude Code in once
+# on the agent computer instead (nevia shell acc-agent, then claude and /login).
+gateway_url = "https://ai.aiven.io"
+gateway_secret = "AIVEN_AI_API_KEY"      # the env var setup reads, into the workspace secret ACC_AIVEN_AI_API_KEY
+model = ""               # the gateway's name for the model; empty: Claude Code's default
+gateway_models = { opus = "", sonnet = "", haiku = "" }   # the gateway's names for Claude Code's aliases
+reasoning_effort = "medium"   # low to max: lower is faster per turn, but may need more turns
+max_turns = 150
+# What Claude may use without asking; read-only shell commands (cat, grep, find...) pass anyway.
+allowed_tools = [
+    "Read", "Edit", "Write", "Glob", "Grep", "KillShell",
+    "Bash(mvn:*)", "Bash(java:*)", "Bash(jar:*)", "Bash(curl:*)", "Bash(psql:*)", "Bash(pg_dump:*)",
+    "Bash(diff:*)", "Bash(sleep:*)", "Bash(echo:*)", "Bash(unzip:*)", "Bash(kill:*)", "Bash(pkill:*)",
+    "Bash(grep:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(wc:*)", "Bash(sort:*)",   # in pipes too
+    "Bash(sh:*)", "Bash(python3:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(find:*)",   # it runs mvn anyway, as its own user
+]

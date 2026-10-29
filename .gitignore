@@ -1,1 +1,13 @@
+# The mongo2pg release binary and each run's state, report and pull request text
+/build/
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Local secrets
 /.env
+.envrc
