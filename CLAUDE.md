@@ -9,11 +9,13 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
 
 - Python 3.15 with uv: `uv sync`, then `uv run ruff format`, `uv run ruff check`, `uv run ty check` and
   `uv run pytest` before a commit (the prek hooks, `uv run prek install`, run ruff and ty too). No just.
-- The CLI is `uv run agent`. Settings and pinned versions are in `agent.toml`: `[nevia]`, `[runtime]`, `[ai]`,
-  `[mongodb]` and `[mongo2pg]` shared, then `[m2p.*]` and `[acc.*]`; it holds no secret, only the gateway key's
+- The CLI is `uv run agent`. Settings and pinned versions are in `agent.toml`: `[runtime]`, `[ai]`, `[mongodb]`
+  and `[mongo2pg]` shared, then `[m2p.*]` and `[acc.*]`, each with its own `[<agent>.nevia] workspace`; it
+  holds no secret, only the gateway key's
   env var. Keep in it only what someone may choose: conventions (secret names, users, paths) are ClassVars
   or constants in the code. Never hard-code Nevia names or
-  versions in code. The two agents' Nevia names must not collide: they share a workspace.
+  versions in code. Each agent has its own workspace (`[<agent>.nevia]`, made by `Bootstrap.up` if need be);
+  their Nevia names still must not collide, should they share one.
 - Secrets come from `.env` (ignored by git; `.env.example` lists them), which `agent` loads at each command
   without overriding the shell. Add a secret an agent needs to `.env.example`.
 - The code is laid out by where it runs; keep it so (`tests/test_layers.py` checks it):
@@ -47,7 +49,7 @@ and `agent acc ...`: `setup`, `run`, `status`, `stop`, `clean`, `destroy`. READM
 - Long remote work runs through `Computer.start_job`/`wait_job`/`run_job` (nohup plus polling), because Nevia
   exec sessions drop.
 - mongo2pg is always `mongo2pg.release`'s binary, never built, here or on an agent computer.
-- Every prompt is a file in `src/prompts/<agent>/`, read with `core.agent.prompts.prompt`, one per task and in the
+- Every prompt is a file in `prompts/<agent>/`, read with `core.agent.prompts.prompt`, one per task and in the
   same shape (the job, `## What is here`, how to check, `## How to work`, the expected output as a template,
   `## Rules`): m2p's `AGENTS.md`, each AI session's prompt (filled with `str.format`, so literal braces
   are doubled), acc's `MIGRATE.md` and `FEATURE.md` (`{{REPO}}`, `{{BRANCH}}`, `{{RUN_DIR}}`, `{{CHECK}}`,

@@ -94,7 +94,7 @@ def test_the_bundle_has_this_code_nevia_kit_the_settings_and_pinned_requirements
     )
     assert {"src/m2p/agent.py", "src/acc/agent.py", "src/m2p/scripts/branch.sh"} <= set(names)
     assert any(n.startswith("src/nevia_kit-") and n.endswith(".dist-info/METADATA") for n in names)
-    assert "src/prompts/acc/MIGRATE.md" in names and "agent.toml" in names
+    assert "prompts/acc/MIGRATE.md" in names and "agent.toml" in names
     assert not any("__pycache__" in n for n in names)
     assert any(r.startswith("typer==") for r in reqs) and any(r.startswith("cryptography==") for r in reqs)
     assert not any(r.startswith("nevia-kit") for r in reqs)  # sent as source: a private repository

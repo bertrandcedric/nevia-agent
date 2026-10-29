@@ -13,10 +13,9 @@ from importlib import resources
 from pathlib import Path
 from typing import ClassVar
 
-from core.nevia import Nevia, NeviaError
+from core.nevia import Nevia
 from core.shell import console, redact, run
 
-DOWNLOAD_TRIES = 3
 LIB = ".nevia-agent/lib.sh"  # on every computer, under its home
 MONGO_DIR = ".nevia-agent"  # where a MongoDB computer has mongo-host.sh and mongo-up.sh
 
@@ -80,8 +79,10 @@ class Computer:
         return os.environ.get("AGENT_COMPUTER") == self.name
 
     def awake(self) -> None:
-        """Wake the computer if it sleeps: exec never does."""
-        if self.nevia.computers.get(self.name)["state"] == "sleeping":
+        """Wake the computer if it sleeps: exec never does. One that isn't there says in which workspace."""
+        if (c := self.nevia.computers.find(self.name)) is None:
+            raise RuntimeError(f"no computer {self.name} in workspace {self.nevia.workspace}: `setup` makes it")
+        if c["state"] == "sleeping":
             console.log(f"waking {self.name}")
             self.nevia.computers.wake(self.name)
 
@@ -107,17 +108,11 @@ class Computer:
         self.upload(bundled(self.PACKAGE, f"scripts/{name}"), dest, mode)
 
     def download(self, path: str) -> bytes:
-        """A file of the computer (under its home), read again from the start if a slice fails: nevia-kit's
-        download reads it in many execs, and one that answers without a result fails it with a bare KeyError."""
+        """A file of the computer (under its home): here, read; elsewhere, in slices through the CLI, each retried
+        while the service is busy."""
         if self.here:
             return (Path.home() / path).read_bytes()
-        for attempt in range(1, DOWNLOAD_TRIES + 1):
-            try:
-                return self.nevia.computers.download(self.name, path)
-            except (KeyError, NeviaError) as err:
-                console.log(f"{self.name}: download of ~/{path} failed ({err!r}), try {attempt} of {DOWNLOAD_TRIES}")
-                time.sleep(self.poll)
-        raise NeviaError(f"could not download ~/{path} from {self.name} after {DOWNLOAD_TRIES} tries")
+        return self.nevia.computers.download(self.name, path)
 
     @property
     def url(self) -> str:

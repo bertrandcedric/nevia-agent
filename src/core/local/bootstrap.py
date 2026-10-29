@@ -66,6 +66,8 @@ class Bootstrap:
     def up(self, env: dict[str, str]) -> None:
         """The agent computer with its key and this code, and the secrets from `env`. Safe to repeat: it makes
         what is missing, and sends the code again."""
+        if self.nevia.ensure_workspace():
+            console.log(f"workspace {self.nevia.workspace} made, you its admin")
         self.secrets(env)
         if not self.nevia.computers.exists(self.name):
             console.log(f"creating computer {self.name}")

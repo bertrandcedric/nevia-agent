@@ -107,10 +107,8 @@ def test_the_ai_gets_the_cli_and_a_copy_of_the_key_of_its_own(settings: Settings
     monkeypatch.setattr(steps, "run", lambda args, **_kw: ran.append(args) or "")
     steps.lend_nevia(settings)
     key = f"/home/acc-ai/{settings.agent.key_path}"
-    assert ran[0][-4:] == ["-m", "755", f"{steps.HOME}/.local/bin/nevia", "/home/acc-ai/.local/bin/nevia"]
-    assert ran[1][:3] == ["sudo", "-n", "install"] and ran[1][-3:] == [
-        "600",
-        f"{steps.HOME}/{settings.agent.key_path}",
-        key,
-    ]
-    assert f"auth use-key-file {key}" in ran[2][-1] and "workspace use default" in ran[2][-1]
+    assert ran[0] == ["sudo", "-n", "mkdir", "-p", "/home/acc-ai/.local/bin", str(Path(key).parent)]
+    assert ran[1] == ["sudo", "-n", "chown", "-R", "acc-ai:acc-ai", "/home/acc-ai/.config", "/home/acc-ai/.local"]
+    assert ran[2][-4:] == ["-m", "755", f"{steps.HOME}/.local/bin/nevia", "/home/acc-ai/.local/bin/nevia"]
+    assert "-D" not in ran[2] and ran[3][-3:] == ["600", f"{steps.HOME}/{settings.agent.key_path}", key]
+    assert f"auth use-key-file {key}" in ran[4][-1] and "workspace use acc" in ran[4][-1]

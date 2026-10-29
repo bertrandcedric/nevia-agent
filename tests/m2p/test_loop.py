@@ -22,7 +22,7 @@ from m2p import local as cli
 from m2p import steps
 from m2p.agent import Loop
 from m2p.config import Settings
-from m2p.local import Try, _brief, _summary, _tries
+from m2p.local import Try, _summary, _tries
 
 
 @pytest.fixture
@@ -217,7 +217,7 @@ def test_run_reads_each_try_and_is_brief_by_default() -> None:
     assert _summary(_tries("# Attempts\n")) == "no tries"
     acts = ("intent: Creating try 2", "$ ls", "edit x", "says: hi", "failed: boom", "error: rate limited")
     shown = [loop.Activity("1", "t", t) for t in acts]
-    assert [a.text for a in shown if _brief(a)] == [
+    assert [a.text for a in shown if a.brief] == [
         "intent: Creating try 2",
         "says: hi",
         "failed: boom",

@@ -1,33 +1,10 @@
 import subprocess
 
-import pytest
-from nevia_kit import NeviaError
 from nevia_kit.testing import FakeApi
 
 from acc.computer import Computer
 from core.local.collect import Collect, _script
 from tests.fake_nevia import on_fake
-
-
-def test_download_reads_again_after_an_exec_without_a_result(monkeypatch) -> None:
-    fake = FakeApi(validate=True)
-    fake.add("computers", "acc-agent")
-    nevia = on_fake(fake)
-    pc = Computer("acc-agent", nevia, 0)
-    answers: list[object] = [KeyError("result"), b"jar"]
-
-    def download(_ref: str, _path: str) -> bytes:
-        answer = answers.pop(0)
-        if isinstance(answer, BaseException):
-            raise answer
-        assert isinstance(answer, bytes)
-        return answer
-
-    monkeypatch.setattr(nevia.computers, "download", download)
-    assert pc.download("app.jar") == b"jar"
-    answers[:] = [KeyError("result")] * 3
-    with pytest.raises(NeviaError, match="after 3 tries"):
-        pc.download("app.jar")
 
 
 def test_follow_job_shows_every_line_of_the_log_not_only_the_last() -> None:

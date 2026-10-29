@@ -290,11 +290,12 @@ def lend_nevia(s: Settings) -> None:
     the AI drives Nevia as the agent does. Again at each setup, so that a new key reaches it."""
     home = Path(pwd.getpwnam(AI_USER).pw_dir)
     key = home / s.agent.key_path
-    for src, dest, mode in (
-        (HOME / ai.BIN / "nevia", home / ai.BIN / "nevia", "755"),
-        (HOME / s.agent.key_path, key, "600"),
-    ):
-        run(["sudo", "-n", "install", "-D", "-o", AI_USER, "-g", AI_USER, "-m", mode, str(src), str(dest)])
+    lent = ((HOME / ai.BIN / "nevia", home / ai.BIN / "nevia", "755"), (HOME / s.agent.key_path, key, "600"))
+    # Its directories made, then all of ~/.config and ~/.local its own: the CLI writes its config there.
+    run(["sudo", "-n", "mkdir", "-p", *(str(dest.parent) for _, dest, _ in lent)])
+    run(["sudo", "-n", "chown", "-R", f"{AI_USER}:{AI_USER}", str(home / ".config"), str(home / ".local")])
+    for src, dest, mode in lent:
+        run(["sudo", "-n", "install", "-o", AI_USER, "-g", AI_USER, "-m", mode, str(src), str(dest)])
     nv = f"~/{ai.BIN}/nevia"
     signs_in = f"{nv} auth use-key-file {q(key)} >/dev/null && {nv} workspace use {q(s.nevia.workspace)} >/dev/null"
     run(["sudo", "-n", "-u", AI_USER, "-H", "bash", "-lc", signs_in])

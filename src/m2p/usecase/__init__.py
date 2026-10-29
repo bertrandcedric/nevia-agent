@@ -5,14 +5,28 @@ What is specific to that data lives here, the rest of the agent loop works on an
 describes it in the agent's guide.
 """
 
+import ast
 import shlex
 from importlib import resources
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from m2p.usecase.seed import STRANGE
-
 COLLECTION = "customers"  # the source has no data while this collection is empty
+
+
+def file(name: str) -> bytes:
+    return resources.files(__package__).joinpath(name).read_bytes()
+
+
+def _strange() -> list[str]:
+    """seed.py's STRANGE, read from its source: seed.py needs pymongo, which only the source computer has."""
+    for node in ast.parse(file("seed.py")).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "STRANGE" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise RuntimeError("seed.py has no STRANGE")
+
+
+STRANGE = _strange()  # the kinds of anomalies seed.py can add
 
 
 class Seed(BaseModel):
@@ -33,10 +47,6 @@ class Seed(BaseModel):
         if isinstance(v, list) and (unknown := [k for k in v if k != "all" and k not in STRANGE]):
             raise ValueError(f"unknown strange kinds {unknown}; they are: all, {', '.join(STRANGE)}")
         return v
-
-
-def file(name: str) -> bytes:
-    return resources.files(__package__).joinpath(name).read_bytes()
 
 
 # The data, as the agent's guide (`{data}` in prompts/m2p/AGENTS.md) puts it after the name of its database.

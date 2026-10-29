@@ -116,3 +116,7 @@ def test_strange_kinds_as_a_list_or_a_string(kinds: object, arg: str) -> None:
 def test_an_unknown_strange_kind_fails_when_the_settings_load() -> None:
     with pytest.raises(ValidationError, match="unknown strange kinds"):
         usecase.Seed(customers=1, seed=42, strange=5, strange_kinds=["date-string", "date-strng"])
+
+
+def test_the_settings_read_seed_pys_kinds_without_importing_it() -> None:
+    assert usecase.STRANGE == seed.STRANGE

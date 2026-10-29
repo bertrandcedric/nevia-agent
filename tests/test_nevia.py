@@ -5,7 +5,7 @@ import pytest
 from nevia_kit.testing import FakeApi
 
 from core import nevia
-from core.computer import bundled
+from core.computer import Computer, bundled
 from core.config import Runtime
 from core.local import runtime
 from core.nevia import CliError, CommandFailed, Nevia
@@ -99,3 +99,19 @@ def test_the_runtime_installs_the_cli_signed_in_with_the_key_file() -> None:
     script = bundled("core", "scripts/setup-runtime.sh").decode()
     assert "NEVIA_VERSION=$nevia" in script and 'auth use-key-file "$HOME/$key"' in script
     assert 'workspace use "$workspace"' in script and "PATH=$HOME/.local/bin" in script
+
+
+def test_the_workspace_is_made_once() -> None:
+    kit = FakeApi(validate=True).client()
+    nv = Nevia("m2p", run=FakeCli(kit), _kit=kit)
+    assert nv.ensure_workspace() is True
+    assert nv.ensure_workspace() is False
+    assert [w["name"] for w in kit.workspaces.list()].count("m2p") == 1
+
+
+def test_a_missing_computer_says_in_which_workspace() -> None:
+    class Pc(Computer):
+        PACKAGE, JOBS_DIR = "m2p", "$HOME/.x"
+
+    with pytest.raises(RuntimeError, match="no computer m2p-agent in workspace default: `setup` makes it"):
+        Pc("m2p-agent", on_fake(FakeApi(validate=True)), 0).awake()

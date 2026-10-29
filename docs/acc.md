@@ -73,7 +73,7 @@ sequenceDiagram
   older version.
 - **analysis** (migrate): mongo2pg `init` and `infer` on `acc-agent`, through a nevia-kit link to `acc-mongo`;
   the AI gets the schemas, stats, warnings, mappings and SQL read-only, without the sample values.
-- **ai**: the task is `src/prompts/acc/MIGRATE.md`, or `FEATURE.md` around your request. For a
+- **ai**: the task is `prompts/acc/MIGRATE.md`, or `FEATURE.md` around your request. For a
   task, the AI also writes a feature check: a script that calls the new endpoints of a deployed app.
 - **build**: `mvn package`, the tests included.
 - **sandbox**: `acc-app-RUN`, on `acc-pg-RUN` loaded with `local/postgres-init/*.sql`, or on a fork of

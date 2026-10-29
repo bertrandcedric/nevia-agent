@@ -1,5 +1,6 @@
-"""`agent.toml` at the repository root: the sections both agents share (`[nevia]`, `[runtime]`, `[ai]`,
-`[mongodb]`, `[mongo2pg]`), then one table per agent, `[m2p]` and `[acc]`, which each agent's own settings read.
+"""`agent.toml` at the repository root: the sections both agents share (`[runtime]`, `[ai]`, `[mongodb]`,
+`[mongo2pg]`), then one table per agent, `[m2p]` and `[acc]`, with its own Nevia workspace (`[<agent>.nevia]`),
+which each agent's own settings read.
 What is a convention, not a choice (secret names, users, paths), is in the code, as ClassVars."""
 
 import tomllib
@@ -18,7 +19,7 @@ class Section(BaseModel):
 
 
 class Nevia(Section):
-    workspace: str
+    workspace: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]  # the agent's own
 
 
 class Runtime(Section):
@@ -129,5 +130,5 @@ def read(agent: str, path: Path = CONFIG_FILE) -> dict[str, Any]:
     """One agent's settings: the shared sections, and its own table's."""
     with path.open("rb") as f:
         data = tomllib.load(f)
-    shared = {k: data.get(k) for k in ("nevia", "runtime", "ai", "mongodb", "mongo2pg")}
+    shared = {k: data.get(k) for k in ("runtime", "ai", "mongodb", "mongo2pg")}
     return {**shared, **data.get(agent, {})}

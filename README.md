@@ -11,7 +11,8 @@ one half of the migration. Everything runs on Nevia; here, only the `agent` CLI.
 The AI agent is Claude Code, or GitHub Copilot CLI with `[ai] engine = "copilot"` in `agent.toml`, for both;
 models go through the Aiven AI gateway.
 
-A 10-slide deck of this path, with an animated diagram of each agent, to present it: [docs/presentation.md](docs/presentation.md) (Marp).
+A 10-slide deck of this path, with an animated diagram of each agent, to present it: [docs/presentation.md](docs/presentation.md) (Marp), and as PowerPoint in Aiven's brand template, [docs/presentation.pptx](docs/presentation.pptx)
+(`uv run --with python-pptx docs/make_pptx.py` makes it again from the Markdown).
 
 ## The migration
 
@@ -61,7 +62,7 @@ when to merge and when to cut over.
 
 ## Setup
 
-Prerequisites: `uv`, `curl`, the `nevia` CLI and a Nevia workspace (`nevia login`), SSH access
+Prerequisites: `uv`, `curl`, the `nevia` CLI signed in (`nevia login`), SSH access
 to [aiven/nevia-kit](https://github.com/aiven/nevia-kit) (for its tunnels), an Aiven AI gateway key, and for acc a GitHub
 fine-grained token on the app's repository (*Contents* and *Pull requests*: read and write).
 
@@ -74,14 +75,17 @@ uv run agent acc setup
 
 - **`.env`** (ignored by git; [.env.example](.env.example) lists what goes in it) holds the secrets. `agent`
   reads it at each command, without overriding the shell's variables.
-- **`agent.toml`** holds what you may choose: `[nevia]`, `[runtime]`, `[ai]`, `[mongodb]` and `[mongo2pg]` for
-  both agents, then `[m2p.*]` and `[acc.*]`. What is a convention (secret names, users, paths) is in the code.
+- **`agent.toml`** holds what you may choose: `[runtime]`, `[ai]`, `[mongodb]` and `[mongo2pg]` for both
+  agents, then `[m2p.*]` and `[acc.*]`, each with its workspace. What is a convention (secret names, users, paths) is in the code.
 - **`[ai]`**: `engine = "claude"` (Claude Code, the default) or `"copilot"` (GitHub Copilot CLI), each with
   its own `[ai.claude]` or `[ai.copilot]`: version, gateway URL, model, reasoning effort. The gateway key is
   the env var `gateway_secret` names; an empty `ai.claude.gateway_url` means a Claude Code login on the agent
   computer instead.
-- **Names**: everything an agent makes on Nevia carries its name, so both share a workspace: resources
-  `m2p-...` and `acc-...` (a setting that breaks this is refused), workspace secrets `M2P_...` and `ACC_...`.
+- **Workspaces**: each agent works in its own Nevia workspace, `m2p.nevia.workspace` and `acc.nevia.workspace`
+  (`m2p` and `acc`), which `setup` makes if it isn't there, with you as its admin.
+- **Names**: everything an agent makes on Nevia carries its name, so that the two could share a workspace too:
+  resources `m2p-...` and `acc-...` (a setting that breaks this is refused), workspace secrets `M2P_...` and
+  `ACC_...`.
 
 ## Where things run
 
@@ -134,7 +138,8 @@ Results land in `build/m2p-runs/` and `build/acc-runs/`.
   service that needs it); none is printed, and connection URIs are scrubbed from logs.
 - `clean` and `destroy` touch only the names in `agent.toml` and those made from them.
 - Each agent computer holds its own *editor* key on the workspace (a week, renewed by deleting its secret and
-  running `setup`), in a mode-600 file, and so does its AI, through the CLI: use a dedicated workspace.
+  running `setup`), in a mode-600 file, and so does its AI, through the CLI: it reaches its agent's workspace
+  only, which is why each has its own.
 
 ## Code
 
@@ -147,9 +152,9 @@ src/
                            binary, the prompts
   core/scripts/            any Nevia computer: lib.sh, MongoDB, the AI's render-<engine>.jq, the runtime's setup
   core/*.py                both sides: settings, computers and their jobs, the agents' activity
-  prompts/m2p/, prompts/acc/   what each model is told
   m2p/, acc/               each agent: local.py (your machine), agent.py and steps.py (its computer), scripts/,
                            computer.py, config.py          docs/m2p.md, docs/acc.md
+prompts/m2p/, prompts/acc/ what each model is told, outside the code
 ```
 
 ```sh

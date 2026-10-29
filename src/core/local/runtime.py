@@ -21,7 +21,7 @@ from core.config import CONFIG_FILE, ROOT, Runtime
 HOME = ".nevia-agent"  # under the computer user's home
 BUNDLE = f"{HOME}/bundle.tgz"
 SRC = Path(__file__).resolve().parents[2]  # src/, where this project's packages are
-PACKAGES = ("core", "m2p", "acc", "prompts")
+PACKAGES = ("core", "m2p", "acc")
 SHIPPED = "nevia-kit"  # sent as source, not installed from an index
 _NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 
@@ -71,13 +71,14 @@ def _add_metadata(tar: tarfile.TarFile, dist: str) -> None:
 
 def bundle() -> bytes:
     """The .tar.gz `setup-runtime.sh` installs: `src/` (this package, and nevia-kit with its metadata),
-    `agent.toml`, `requirements.txt`."""
+    `prompts/`, `agent.toml`, `requirements.txt`."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for package in PACKAGES:
             _add_tree(tar, SRC / package, f"src/{package}")
         _add_tree(tar, Path(nevia_kit.__file__).parent, "src/nevia_kit")
         _add_metadata(tar, SHIPPED)
+        _add_tree(tar, ROOT / "prompts", "prompts")
         tar.add(CONFIG_FILE, "agent.toml")
         reqs = ("\n".join(requirements()) + "\n").encode()
         info = tarfile.TarInfo("requirements.txt")

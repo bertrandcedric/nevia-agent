@@ -63,7 +63,7 @@ class FakeCli:
         self.calls: list[list[str]] = []
 
     def __call__(self, argv: list[str], stdin: bytes | None) -> subprocess.CompletedProcess[bytes]:
-        args = argv[3:]  # nevia --workspace WS
+        args = argv[3:] if argv[1] == "--workspace" else argv[1:]  # nevia [--workspace WS] ...
         self.calls.append(args)
         if args and args[0] == "--json":
             args = args[1:]
@@ -93,7 +93,13 @@ class FakeCli:
         if cmd == "access" and sub == "keys":
             sub, rest = f"keys {rest[0]}", rest[1:]
         o, pos = _opts(rest, *FLAGS)
+        if cmd == "workspace":
+            sub, pos = rest[0], rest[1:]
         match cmd, sub:
+            case "workspace", "get":
+                return {"workspace": kit.workspaces.get(pos[0])}
+            case "workspace", "create":
+                kit.workspaces.create(pos[0])
             case "ls", "":
                 return {"computers": kit.computers.list(), "has_more": False}
             case "status", "":

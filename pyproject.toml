@@ -8,7 +8,6 @@ dependencies = [
     "httpx>=0.28.1",
     "nevia-kit",
     "pydantic>=2.14.1",
-    "pymongo>=4.19.0",
     "rich>=15.0.0",
     "typer>=0.27.3",
 ]
@@ -20,6 +19,7 @@ agent = "core.local.cli:main"
 dev = [
     "openapi-core>=0.23.1",
     "prek>=0.5.7",
+    "pymongo>=4.19.0",  # for tests/m2p/usecase: seed.py runs on the source computer, with Debian's
     "pytest>=9.1.1",
     "ruff>=0.17.2",
     "ty>=0.0.92",
@@ -30,7 +30,7 @@ requires = ["uv_build>=0.13.5,<0.14"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["core", "m2p", "acc", "prompts"]
+module-name = ["core", "m2p", "acc"]
 
 [tool.uv.sources]
 nevia-kit = { git = "ssh://git@github.com/aiven/nevia-kit", tag = "v0.1.0" }

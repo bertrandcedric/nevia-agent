@@ -39,7 +39,6 @@ RUNS_DIR = BUILD_DIR / "m2p-runs"  # where `collect` puts each run's results, at
 # (dumps) are listed only.
 COLLECT_SKIP = ("bin", "tools", "mongo2pg", "tries/*/data")
 RUN_ID = re.compile(r"\d{12}")
-RUN_ID = re.compile(r"\d{12}")
 
 
 FINAL_SQL = "final.sql"  # next to DONE.md in the collected results
@@ -201,11 +200,6 @@ def _event(when: str, text: str, style: str | None = None) -> None:
     out.print(f"[{when}] {text}", style=style, markup=False, highlight=False)
 
 
-def _brief(a: Activity) -> bool:
-    """What `run` shows of the agent's actions without --details: what it says, its failures and errors."""
-    return a.brief
-
-
 def _print_activity(events: list[Activity], *, details: bool) -> None:
     for a in events:
         text = a.text if details else _clip(a.text.replace("says:", "agent:", 1))
@@ -262,7 +256,8 @@ def _follow(lp: Local, interval: float, *, details: bool = False) -> None:
                 sessions.add(line)
                 when, _, what = line.partition(" ")
                 _event(_local(when), what)
-        new = [a for a in st.activity if a.id not in acts and (details or _brief(a))]
+        # Without --details, what it says, its failures and errors.
+        new = [a for a in st.activity if a.id not in acts and (details or a.brief)]
         _print_activity(new if acts else new[-20:], details=details)  # at the start, the latest few only
         acts.update(a.id for a in st.activity)
         _branch_events(now, branches, set(st.branches))

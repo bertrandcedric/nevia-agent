@@ -93,6 +93,18 @@ class Nevia:
             time.sleep(2 * attempt)
         return p
 
+    def ensure_workspace(self) -> bool:
+        """The workspace, made if it isn't there (whoever runs this becomes its admin); whether it was made."""
+        p = self.run([self.command, "--json", "workspace", "get", self.workspace], None)
+        if p.returncode == 0:
+            return False
+        if p.returncode != NOT_FOUND:
+            raise CliError(["workspace", "get"], p.returncode, _message(p))
+        p = self.run([self.command, "workspace", "create", self.workspace], None)
+        if p.returncode:
+            raise CliError(["workspace", "create"], p.returncode, _message(p))
+        return True
+
     def ok(self, *args: str, stdin: bytes | None = None) -> str:
         """`nevia ARGS`, its output; any failure raises."""
         p = self.cli(*args, stdin=stdin)

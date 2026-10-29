@@ -1,9 +1,7 @@
-# Settings for both agents: what you may choose, the rest is in the code. Names refer to Nevia resources in
-# `nevia.workspace`. Everything an agent makes there carries its name: resources m2p-... or acc-... (checked
-# when this file is read), workspace secrets M2P_... or ACC_.... No secret here: `.env` has the values `setup` reads.
-
-[nevia]
-workspace = "default"
+# Settings for both agents: what you may choose, the rest is in the code. Each agent works in its own Nevia
+# workspace (`<agent>.nevia.workspace`, made by `setup` if need be), and everything it makes there carries its
+# name: resources m2p-... or acc-... (checked when this file is read), workspace secrets M2P_... or ACC_....
+# No secret here: `.env` has the values `setup` reads.
 
 [runtime]
 # The agents' own code runs on their computers: your machine only makes the agent computer, its key and the
@@ -53,6 +51,9 @@ release = "mongo2pg-v0.8.0"   # its linux-x86_64 binary, checked against GitHub'
 # m2p: an agent loop works out how to load the hello MongoDB into PostgreSQL with mongo2pg.
 # ======================================================================================================
 
+[m2p.nevia]
+workspace = "m2p"        # its own: its agent's key, an editor's, reaches nothing else
+
 [m2p.mongo]
 # The source: a computer running MongoDB with the use case's data.
 computer = "m2p-mongo"
@@ -78,6 +79,9 @@ sessions = 3             # AI sessions in a run, if one stops before DONE.md
 # ======================================================================================================
 # acc: an AI agent changes an app (its migration to Postgres, or a feature) and opens a pull request.
 # ======================================================================================================
+
+[acc.nevia]
+workspace = "acc"        # its own: its agent's key, an editor's (its AI's too), reaches nothing else
 
 [acc.repo]
 # The app the agent changes: a Maven project whose application.properties has database.kind = mongo or

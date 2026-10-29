@@ -7,6 +7,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Each agent has its own Nevia workspace, `[m2p.nevia]` and `[acc.nevia]` (`m2p`, `acc`), instead of a shared
+  `[nevia]`; `setup` makes it if need be. An agent's editor key, and acc's AI's, reaches its own only.
+- `docs/presentation.pptx`, the deck in Aiven's brand template, made from `docs/presentation.md` by
+  `docs/make_pptx.py`: native diagrams, and the two step-by-step animations on one slide each, a step per click.
+- The prompts are in `prompts/` at the project's root, outside `src/`, and pymongo is a dev dependency only
+  (seed.py runs on the source computer, with Debian's).
 - Both agents drive Nevia with the `nevia` CLI (`core.nevia`), on your machine (`nevia login`) and on their
   computers (`[runtime] nevia`, installed by the runtime's setup and signed in with the agent's key), instead of
   nevia-kit, which only does the tunnels now. acc's AI gets the CLI too, with a copy of the key, to look at

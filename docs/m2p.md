@@ -59,7 +59,7 @@ sequenceDiagram
     cli->>you: results in build/m2p-runs/
 ```
 
-- The agent follows `src/prompts/m2p/AGENTS.md`, which gives no hints about the known issues.
+- The agent follows `prompts/m2p/AGENTS.md`, which gives no hints about the known issues.
 - To fix a failure it fixes the data first: mongo2pg's configuration and mappings, or one SQL file,
   `tries/NAME/normalize.sql`, run after the import (never in MongoDB). It changes the SQL model mongo2pg
   inferred only when that can't pass, and uses no JSONB or JSON column.

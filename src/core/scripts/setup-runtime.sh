@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The agents' code on an agent computer: setup-runtime.sh UV_VERSION PYTHON NEVIA_VERSION WORKSPACE COMPUTER KEY_PATH
-# Unpacks ~/.nevia-agent/bundle.tgz (src/, agent.toml, requirements.txt, sent by `agent <m2p|acc> setup`),
+# Unpacks ~/.nevia-agent/bundle.tgz (src/, prompts/, agent.toml, requirements.txt, sent by `agent <m2p|acc> setup`),
 # installs uv, then this Python and the requirements into ~/.nevia-agent/venv when they changed, the nevia CLI
 # into ~/.local/bin, signed in with the computer's key file (KEY_PATH, under the home) in WORKSPACE, and writes
 # ~/.nevia-agent/bin/agent: the `agent` CLI here, with the same key file (the key itself never goes in it).
@@ -32,8 +32,8 @@ if [ ! -x "$home/venv/bin/python" ] || ! cmp -s "$new/requirements.txt" "$home/r
   "$home/bin/uv" venv -q --python "$python" "$home/venv"
   "$home/bin/uv" pip install -q --python "$home/venv/bin/python" -r "$new/requirements.txt"
 fi
-rm -rf "$home/src"
-mv "$new/src" "$new/agent.toml" "$new/requirements.txt" "$home/"
+rm -rf "$home/src" "$home/prompts"
+mv "$new/src" "$new/prompts" "$new/agent.toml" "$new/requirements.txt" "$home/"
 rm -rf "$new" "$home/bundle.tgz"
 
 cat > "$home/bin/agent" <<EOF

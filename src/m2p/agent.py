@@ -117,12 +117,8 @@ class Loop:
         self.link()
 
     def _env_sh(self) -> bytes:
-        s = self.settings
-        values = {
-            "M2P_PG": s.postgres.name,
-        }
-        lines = ['export PATH="$HOME/.local/bin:$PATH"', *(f"export {k}={shlex.quote(v)}" for k, v in values.items())]
-        return ("\n".join(lines) + "\n").encode()
+        pg = shlex.quote(self.settings.postgres.name)
+        return f'export PATH="$HOME/.local/bin:$PATH"\nexport M2P_PG={pg}\n'.encode()
 
     def _upload_tools(self, pc: Computer) -> None:
         """The tools read-only, so the agent can't quietly change how its work is checked."""
