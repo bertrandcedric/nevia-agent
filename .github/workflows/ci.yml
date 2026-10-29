@@ -1,0 +1,40 @@
+# What a commit must pass that needs neither Nevia nor nevia-kit (a private repository, never reached from
+# here): ruff, the scripts' syntax, the TOML files. ty and pytest import nevia-kit: they run locally, with prek
+# and `uv run pytest` (CLAUDE.md).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"  # agent.toml's [runtime] uv
+
+      # Ruff alone, at uv.lock's version, without the project's dependencies.
+      - name: ruff format
+        run: uvx ruff@0.17.2 format --check
+
+      - name: ruff check
+        run: uvx ruff@0.17.2 check
+
+      - name: Scripts
+        run: find src -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: TOML
+        run: python3 -c 'import sys, tomllib; [tomllib.load(open(f, "rb")) for f in sys.argv[1:]]' agent.toml pyproject.toml prek.toml

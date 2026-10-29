@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- A GitHub Actions workflow, `.github/workflows/ci.yml`: ruff, `bash -n` and the TOML files on every push to
+  main and every pull request, without Nevia or nevia-kit; ty and pytest stay local.
+
 ### Changed
 
 - Each agent has its own Nevia workspace, `[m2p.nevia]` and `[acc.nevia]` (`m2p`, `acc`), instead of a shared

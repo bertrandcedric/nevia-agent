@@ -8,7 +8,7 @@ hooks = [
   { id = "end-of-file-fixer" },
   { id = "check-toml" },
   { id = "check-merge-conflict" },
-  { id = "check-added-large-files", args = ["--maxkb=1024"] },
+  { id = "check-added-large-files", args = ["--maxkb=1024"], exclude = "^docs/presentation\\.pptx$" },  # the deck carries the template's images
 ]
 
 # Ruff and ty run from the project environment so their versions come from uv.lock.
