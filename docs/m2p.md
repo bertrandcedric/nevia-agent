@@ -52,15 +52,16 @@ sequenceDiagram
     you->>cli: run
     cli->>agent: starts the loop, then follows its status
     Note over agent: sends itself the guide (AGENTS.md) and its read-only tools
+    agent->>mongo: mongo2pg infer, once: the model in tries/model/
     loop each try, until the report passes
         agent->>pg: branch.sh N: a branch m2p-tryN
-        agent->>mongo: mongo2pg infer, export
+        agent->>mongo: the model copied, then mongo2pg export
         agent->>pg: mongo2pg import, then normalize.sql
         agent->>pg: mongo2pg report --post-import
         Note over agent: records the try in ATTEMPTS.md, and when it fails<br/>changes the config, the mappings or normalize.sql
     end
     agent->>pg: the passing load into m2p-pg, then DONE.md
-    Note over agent,pg: the run's end: new passwords for m2p-pg and the tries;<br/>after a pass, m2p-pg protected and copied into m2p-pg-loaded
+    Note over agent,pg: the run's end: new passwords for m2p-pg and the tries,<br/>and after a pass, m2p-pg protected and copied into m2p-pg-loaded
     cli->>you: results in build/m2p-runs/
 ```
 
