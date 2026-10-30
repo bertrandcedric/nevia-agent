@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" font-family="Helvetica, Arial, sans-serif">
+  <!-- The migration as a triangle: the app at the top, MongoDB and Postgres at the base; m2p and acc in red and purple,
+       both starting from mongo2pg's assessment, in the middle. -->
+  <defs>
+    <marker id="grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9aa5b8"/>
+    </marker>
+    <marker id="m2p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ff3554"/>
+    </marker>
+    <marker id="acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f64ff"/>
+    </marker>
+  </defs>
+
+  <!-- the sides: the app's link, before and after -->
+  <line x1="400" y1="110" x2="200" y2="352" stroke="#9aa5b8" stroke-width="2" stroke-dasharray="8 6"/>
+  <line x1="560" y1="110" x2="760" y2="352" stroke="#9aa5b8" stroke-width="2" marker-end="url(#grey)"/>
+  <text x="270" y="220" text-anchor="end" font-size="18" fill="#6b778c">today</text>
+  <text x="690" y="220" font-size="18" fill="#6b778c">after</text>
+
+  <!-- the app -->
+  <rect x="370" y="30" width="220" height="80" rx="12" fill="#e8eef7" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="480" y="66" text-anchor="middle" font-size="24" font-weight="bold" fill="#1b2a41">The app</text>
+  <text x="480" y="92" text-anchor="middle" font-size="16" fill="#4a6fa5">its code, its API</text>
+
+  <!-- MongoDB -->
+  <path d="M60,370 v80 a100,18 0 0 0 200,0 v-80" fill="#e8eef7" stroke="#4a6fa5" stroke-width="2"/>
+  <ellipse cx="160" cy="370" rx="100" ry="18" fill="#e8eef7" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="160" y="420" text-anchor="middle" font-size="24" font-weight="bold" fill="#1b2a41">MongoDB</text>
+  <text x="160" y="446" text-anchor="middle" font-size="16" fill="#4a6fa5">the source</text>
+
+  <!-- Postgres -->
+  <path d="M700,370 v80 a100,18 0 0 0 200,0 v-80" fill="#e8eef7" stroke="#4a6fa5" stroke-width="2"/>
+  <ellipse cx="800" cy="370" rx="100" ry="18" fill="#e8eef7" stroke="#4a6fa5" stroke-width="2"/>
+  <text x="800" y="420" text-anchor="middle" font-size="24" font-weight="bold" fill="#1b2a41">PostgreSQL</text>
+  <text x="800" y="446" text-anchor="middle" font-size="16" fill="#4a6fa5">the target</text>
+
+  <!-- acc: the app's link, from one side to the other -->
+  <line x1="290" y1="255" x2="660" y2="255" stroke="#6f64ff" stroke-width="5" marker-end="url(#acc)"/>
+  <text x="480" y="210" text-anchor="middle" font-size="22" font-weight="bold" fill="#6f64ff">acc · moves the code</text>
+  <text x="480" y="236" text-anchor="middle" font-size="16" fill="#6b778c">JDBC, tested in a sandbox</text>
+
+  <!-- m2p: the data, along the base -->
+  <line x1="275" y1="415" x2="685" y2="415" stroke="#ff3554" stroke-width="5" marker-end="url(#m2p)"/>
+  <text x="480" y="448" text-anchor="middle" font-size="22" font-weight="bold" fill="#ff3554">m2p · moves the data</text>
+  <text x="480" y="472" text-anchor="middle" font-size="16" fill="#6b778c">tries on branches, checked row by row</text>
+
+  <!-- mongo2pg's assessment of MongoDB: the input both agents start from -->
+  <line x1="255" y1="372" x2="378" y2="322" stroke="#9aa5b8" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#grey)"/>
+  <rect x="380" y="290" width="200" height="56" rx="10" fill="#f3f1ff" stroke="#6f64ff" stroke-width="2"/>
+  <text x="480" y="314" text-anchor="middle" font-size="18" font-weight="bold" fill="#1b2a41">Assessment</text>
+  <text x="480" y="335" text-anchor="middle" font-size="14" fill="#6b778c">mongo2pg: types, a model</text>
+  <line x1="480" y1="290" x2="480" y2="264" stroke="#9aa5b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#grey)"/>
+  <line x1="480" y1="346" x2="480" y2="406" stroke="#9aa5b8" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#grey)"/>
+</svg>

@@ -2,18 +2,21 @@
 marp: true
 title: From MongoDB to PostgreSQL, with AI agents on Nevia
 paginate: true
+style: |
+  section.text { justify-content: flex-start; }
+  section.text ul { flex: 1; display: flex; flex-direction: column; justify-content: space-evenly; margin: 0; }
 ---
 
 <!--
 A 10-slide deck, plus two animated diagrams: one `---` per slide (Marp, or any Markdown-to-slides tool), the
-speaker's notes in HTML comments under each slide. Diagrams are Mermaid: render them to images if the tool doesn't.
+speaker's notes in HTML comments under each slide. Diagrams are Mermaid: render them to images if the tool doesn't;
+the migration's triangle is an image, migration.svg.
 
-Animated diagrams: the slides whose comment reads "animation: m2p, frame N/6" (after slide 6) and
+Animated diagrams: the slides whose comment reads "animation: m2p, frame N/9" (after slide 6) and
 "animation: acc, frame N/7" (after slide 7) are the frames of one animation each. In Marp they are
-consecutive slides, a click apart. For PowerPoint, make each animation ONE slide: the diagram of its last frame,
-with each element appearing (Fade, on click) at the frame where it is first red, and the caption of that frame
-replacing the previous one. The styles: red (`now`) is the step the frame shows, blue (`done`) the steps before,
-grey (`todo`) the ones still to come (hidden until their click). The layout is the same in every frame.
+consecutive slides, a click apart, and so in PowerPoint too (make_pptx.py): one slide per frame, with no
+transition, so that going back a step is going back a slide. A box keeps its colour, its kind's, in every frame; the step
+a frame shows has its arrows in red, and what is still to come is hidden. The layout is the same in every frame.
 -->
 
 # From MongoDB to PostgreSQL
@@ -21,7 +24,7 @@ grey (`todo`) the ones still to come (hidden until their click). The layout is t
 ### A path for the migration, with two AI agents on Nevia
 
 - **Nevia** gives them computers, databases and branches to work on
-- **m2p** moves the data, **acc** moves the code
+- **m2p** (Mongo to Postgres) moves the data, **acc** (application code changer) moves the code
 - You review the evidence, and decide
 
 <!--
@@ -31,13 +34,14 @@ throwaway infrastructure, and a person keeps the decisions (merge, cut over).
 
 ---
 
+<!-- _class: text -->
+
 # Why it is hard
 
-- **The data has no schema**: a field is a date here, a string there; lists, nested objects, missing fields
-- **The code speaks MongoDB**: the driver, BSON, queries, the local setup, the seed data
-- **The API must not change**: same routes, status codes, JSON shapes, for every client
-- **Proof is expensive**: a copy that "looks right" is not a copy that matches, row for row; and every try
-  needs a fresh database and a copy of the app
+- **The data has no schema**: mixed types, nested, missing fields
+- **The code speaks MongoDB**: driver, queries, seed data
+- **The API must not change**: same routes, same JSON
+- **Proof is expensive**: every try needs a fresh database
 
 <!--
 Two halves, data and code, each with its own way to fail. And trying is costly when environments are slow to
@@ -65,13 +69,15 @@ same surface, which is what makes agents possible.
 
 ---
 
+<!-- _class: text -->
+
 # Why Nevia helps a migration
 
-- **Throwaway is cheap**: a branch of the target per try, a fork of MongoDB per feature, deleted after
-- **The real app, beside itself**: a checkpoint restored as a sandbox, on a new Postgres, behind its own URL
-- **Agents get an API, not a laptop**: their own computer, their own key, scoped to a workspace
-- **Secrets stay out of reach**: templated into a command's env at run time, never in prompts or files
-- **You pay for what runs**: computers sleep between runs; `clean` and `destroy` remove what is left
+- **Throwaway is cheap**: a branch per try
+- **The real app, beside itself**: a sandbox from a checkpoint
+- **Agents get an API**: their own computer and key
+- **Secrets stay out of reach**: never in prompts or files
+- **You pay for what runs**: idle computers sleep
 
 <!--
 Each of these maps to a step of the path: branches for the data's tries, checkpoints for the code's sandbox,
@@ -80,20 +86,14 @@ secrets and keys for running agents safely.
 
 ---
 
-# The path, in five steps
+# The migration, in one picture
 
-```mermaid
-flowchart LR
-    a["1. Assess<br/>mongo2pg infer"] --> d["2. Move the data<br/>m2p"]
-    a --> c["3. Move the code<br/>acc"]
-    d --> v["4. Validate<br/>reports, sandbox"]
-    c --> v
-    v --> x["5. Cut over<br/>your decision"]
-```
+![h:400](migration.svg)
 
-- **Assess**: mongo2pg samples MongoDB (types, presence, warnings, a proposed model); the models never see the
-  values
-- Steps 2 and 3 run side by side, from the same analysis; each ends with evidence
+- **m2p**, Mongo to Postgres: the agent that migrates the data
+- **acc**, application code changer: the agent that changes the app's code
+- **mongo2pg** assesses MongoDB first: both agents start from its analysis
+- **You** validate, and cut over
 
 <!--
 The analysis is evidence for the schema, not the schema: it saw a sample, so its NOT NULL and VARCHAR(n) are
@@ -102,13 +102,15 @@ hints to check, not rules. Its warnings become a to-do list for both agents.
 
 ---
 
+<!-- _class: text -->
+
 # 2. Move the data: m2p
 
-- **The AI agent works in tries**, each on its own **branch** of the target Postgres (`m2p-tryN`)
-- A try is checked by **mongo2pg's post-import report**: same row counts, matching checksums, table by table
-- **Fix the data first** (mapping, configuration, one `normalize.sql`), change the model only when it must
-- No JSONB shortcut; every try recorded in `ATTEMPTS.md`, every branch kept until `clean`
-- The end: the target loaded, and **`final.sql`**, all the SQL it took
+- **m2p, Mongo to Postgres**: an AI agent that migrates the data
+- **One try, one branch** of the target Postgres
+- **Checked by mongo2pg**: row counts and checksums
+- **Fix the data first**, the model only if needed
+- **The result**: the target loaded, and `final.sql`
 
 <!--
 The loop is the point: it fails, reads the report, fixes, tries again on a fresh branch. Branches are what make
@@ -117,9 +119,9 @@ that loop cheap enough to run unattended.
 
 ---
 
-<!-- animation: m2p, frame 1/6 -->
+<!-- animation: m2p, frame 1/9 -->
 
-# m2p, step by step: 1/6
+# m2p, step by step: 1/9
 
 ```mermaid
 flowchart LR
@@ -128,44 +130,58 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class you,agent now
-    class mongo,pg,infer,branch,report,fix,finish todo
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,infer,t1,f1,t2,f2,t3,finish todo
     linkStyle 0 stroke:#ff3554,stroke-width:2px
-    linkStyle 1 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 2 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 3 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 4 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 1 stroke:#fff,color:#fff
+    linkStyle 2 stroke:#fff,color:#fff
+    linkStyle 3 stroke:#fff,color:#fff
+    linkStyle 4 stroke:#fff,color:#fff
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**Your machine makes the agent computer.** Its own Nevia key, the secrets from `.env`, this code: nothing else is made from your machine.
+**It starts on your machine.** You start the agent: it gets its own computer on Nevia, and does the rest from there.
 
 ---
 
-<!-- animation: m2p, frame 2/6 -->
+<!-- animation: m2p, frame 2/9 -->
 
-# m2p, step by step: 2/6
+# m2p, step by step: 2/9
 
 ```mermaid
 flowchart LR
@@ -174,45 +190,59 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class mongo,pg now
-    class you,agent done
-    class infer,branch,report,fix,finish todo
-    linkStyle 0 stroke:#4a6fa5
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg kdb
+    class infer,t1,f1,t2,f2,t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
     linkStyle 1 stroke:#ff3554,stroke-width:2px
     linkStyle 2 stroke:#ff3554,stroke-width:2px
-    linkStyle 3 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 4 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 3 stroke:#fff,color:#fff
+    linkStyle 4 stroke:#fff,color:#fff
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**The agent makes the source and the target.** MongoDB on `m2p-mongo`, seeded with the data, and an empty Postgres, `m2p-pg`.
+**A source and a target.** The agent sets up MongoDB with the data to move, and an empty PostgreSQL to receive it.
 
 ---
 
-<!-- animation: m2p, frame 3/6 -->
+<!-- animation: m2p, frame 3/9 -->
 
-# m2p, step by step: 3/6
+# m2p, step by step: 3/9
 
 ```mermaid
 flowchart LR
@@ -221,45 +251,60 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class infer now
-    class you,agent,mongo,pg done
-    class branch,report,fix,finish todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg kdb
+    class infer kai
+    class t1,f1,t2,f2,t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
     linkStyle 3 stroke:#ff3554,stroke-width:2px
-    linkStyle 4 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 4 stroke:#fff,color:#fff
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**The AI analyses the data.** mongo2pg samples MongoDB: types, presence, warnings, a proposed SQL model.
+**First, understand the data.** mongo2pg looks at a sample of MongoDB, and proposes how to store it in PostgreSQL.
 
 ---
 
-<!-- animation: m2p, frame 4/6 -->
+<!-- animation: m2p, frame 4/9 -->
 
-# m2p, step by step: 4/6
+# m2p, step by step: 4/9
 
 ```mermaid
 flowchart LR
@@ -268,45 +313,60 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class branch now
-    class you,agent,mongo,pg,infer done
-    class report,fix,finish todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1 kdb
+    class infer kai
+    class f1,t2,f2,t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
     linkStyle 4 stroke:#ff3554,stroke-width:2px
     linkStyle 5 stroke:#ff3554,stroke-width:2px
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**A try, on its own branch.** Each try gets `m2p-tryN`, a branch of the target made in seconds: export from MongoDB, import there.
+**A first try, on a copy.** The data goes into a fresh copy of the target, made in seconds. The check finds differences: it fails.
 
 ---
 
-<!-- animation: m2p, frame 5/6 -->
+<!-- animation: m2p, frame 5/9 -->
 
-# m2p, step by step: 5/6
+# m2p, step by step: 5/9
 
 ```mermaid
 flowchart LR
@@ -315,45 +375,122 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class report,fix now
-    class you,agent,mongo,pg,infer,branch done
-    class finish todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
-    linkStyle 5 stroke:#4a6fa5
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1 kdb
+    class infer,f1 kai
+    class t2,f2,t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
     linkStyle 6 stroke:#ff3554,stroke-width:2px
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
+```
+
+**Find out why, and fix it.** The AI reads what went wrong, and corrects how the data is converted; it changes the tables only if it must.
+
+---
+
+<!-- animation: m2p, frame 6/9 -->
+
+# m2p, step by step: 6/9
+
+```mermaid
+flowchart LR
+    you["Your machine<br/>agent m2p"]
+    agent["m2p-agent<br/>the AI agent, mongo2pg"]
+    mongo[("m2p-mongo<br/>MongoDB and its data")]
+    pg[("m2p-pg<br/>the target")]
+    infer["mongo2pg infer<br/>a model, warnings"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
+    finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
+    you -->|"computer, key,<br/>secrets, code"| agent
+    agent -->|"makes"| mongo
+    agent -->|"makes"| pg
+    mongo -->|"samples"| infer
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1,t2 kdb
+    class infer,f1 kai
+    class f2,t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
     linkStyle 7 stroke:#ff3554,stroke-width:2px
     linkStyle 8 stroke:#ff3554,stroke-width:2px
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**Checked, fixed, tried again.** mongo2pg's post-import report compares every table; when it fails, the AI fixes the data and tries again on a new branch. Every branch stays, as evidence.
+**A second try, on a new copy.** The fix is tried on another fresh copy. Not right yet.
 
 ---
 
-<!-- animation: m2p, frame 6/6 -->
+<!-- animation: m2p, frame 7/9 -->
 
-# m2p, step by step: 6/6
+# m2p, step by step: 7/9
 
 ```mermaid
 flowchart LR
@@ -362,49 +499,192 @@ flowchart LR
     mongo[("m2p-mongo<br/>MongoDB and its data")]
     pg[("m2p-pg<br/>the target")]
     infer["mongo2pg infer<br/>a model, warnings"]
-    branch[("m2p-tryN<br/>a branch of m2p-pg")]
-    report{"post-import report<br/>counts, checksums"}
-    fix["fix the data<br/>config, mappings,<br/>normalize.sql"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
     finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
     you -->|"computer, key,<br/>secrets, code"| agent
     agent -->|"makes"| mongo
     agent -->|"makes"| pg
     mongo -->|"samples"| infer
-    pg -.->|"branch.sh N"| branch
-    infer -->|"export, import"| branch
-    branch --> report
-    report -->|"fails"| fix
-    fix -->|"next try"| branch
-    report -->|"passes"| finish
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class finish now
-    class you,agent,mongo,pg,infer,branch,report,fix done
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
-    linkStyle 5 stroke:#4a6fa5
-    linkStyle 6 stroke:#4a6fa5
-    linkStyle 7 stroke:#4a6fa5
-    linkStyle 8 stroke:#4a6fa5
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1,t2 kdb
+    class infer,f1,f2 kai
+    class t3,finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
+    linkStyle 7 stroke:#9aa5b8
+    linkStyle 8 stroke:#9aa5b8
     linkStyle 9 stroke:#ff3554,stroke-width:2px
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
 ```
 
-**Done.** The passing load goes into `m2p-pg`; `run` collects DONE.md, the tries and `final.sql`, all the SQL it took.
+**Another look, another fix.** The AI finds the next problem, and corrects it.
+
+---
+
+<!-- animation: m2p, frame 8/9 -->
+
+# m2p, step by step: 8/9
+
+```mermaid
+flowchart LR
+    you["Your machine<br/>agent m2p"]
+    agent["m2p-agent<br/>the AI agent, mongo2pg"]
+    mongo[("m2p-mongo<br/>MongoDB and its data")]
+    pg[("m2p-pg<br/>the target")]
+    infer["mongo2pg infer<br/>a model, warnings"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
+    finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
+    you -->|"computer, key,<br/>secrets, code"| agent
+    agent -->|"makes"| mongo
+    agent -->|"makes"| pg
+    mongo -->|"samples"| infer
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1,t2,t3 kdb
+    class infer,f1,f2 kai
+    class finish todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
+    linkStyle 7 stroke:#9aa5b8
+    linkStyle 8 stroke:#9aa5b8
+    linkStyle 9 stroke:#9aa5b8
+    linkStyle 10 stroke:#ff3554,stroke-width:2px
+    linkStyle 11 stroke:#ff3554,stroke-width:2px
+    linkStyle 12 stroke:#fff,color:#fff
+    linkStyle 13 stroke:#fff,color:#fff
+```
+
+**The third try passes.** Every table matches the source, row for row. Each try is kept, as proof.
+
+---
+
+<!-- animation: m2p, frame 9/9 -->
+
+# m2p, step by step: 9/9
+
+```mermaid
+flowchart LR
+    you["Your machine<br/>agent m2p"]
+    agent["m2p-agent<br/>the AI agent, mongo2pg"]
+    mongo[("m2p-mongo<br/>MongoDB and its data")]
+    pg[("m2p-pg<br/>the target")]
+    infer["mongo2pg infer<br/>a model, warnings"]
+    t1[("m2p-try1<br/>report: fails")]
+    f1["analyse, fix<br/>SQL, or the model"]
+    t2[("m2p-try2<br/>report: fails")]
+    f2["analyse, fix<br/>SQL, or the model"]
+    t3[("m2p-try3<br/>report: passes")]
+    finish["DONE.md, final.sql<br/>in build/m2p-runs/"]
+    you -->|"computer, key,<br/>secrets, code"| agent
+    agent -->|"makes"| mongo
+    agent -->|"makes"| pg
+    mongo -->|"samples"| infer
+    infer -->|"export, import"| t1
+    pg -.->|"branch.sh 1"| t1
+    t1 -->|"the report"| f1
+    f1 -->|"next try"| t2
+    pg -.->|"branch.sh 2"| t2
+    t2 -->|"the report"| f2
+    f2 -->|"next try"| t3
+    pg -.->|"branch.sh 3"| t3
+    t3 -->|"passes"| finish
+    finish -->|"loads"| pg
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class mongo,pg,t1,t2,t3 kdb
+    class infer,f1,f2 kai
+    class finish kresult
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
+    linkStyle 7 stroke:#9aa5b8
+    linkStyle 8 stroke:#9aa5b8
+    linkStyle 9 stroke:#9aa5b8
+    linkStyle 10 stroke:#9aa5b8
+    linkStyle 11 stroke:#9aa5b8
+    linkStyle 12 stroke:#ff3554,stroke-width:2px
+    linkStyle 13 stroke:#ff3554,stroke-width:2px
+```
+
+**Done.** The data is in PostgreSQL, and you get the report and the SQL that did it.
 
 
 ---
+
+<!-- _class: text -->
 
 # 3. Move the code: acc
 
-- **The AI agent rewrites the app**: JDBC instead of the driver, normalized tables, transactions
-- **The API stays as it is**: routes, status codes, JSON shapes, validation, the UI
-- The seed data moves too: `local/mongo-init/*.js` becomes `local/postgres-init/*.sql`
-- It checks its work against **a Postgres of its own**, made for the run, then `mvn package` with the tests
-- **No trace of MongoDB left**: a search for mongo, bson, chisel must come back empty
+- **acc, application code changer**: an AI agent that changes the app's code
+- **The AI rewrites the app**: JDBC, normalized tables
+- **The API stays as it is**
+- **The seed data moves too**, as SQL
+- **Tested** on a Postgres of its own
+- **No trace of MongoDB left**
 
 <!--
 acc also builds any feature you describe ("run task"), tested the same way on a fork of the data: the same
@@ -426,45 +706,48 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class you,agent now
-    class gh,app,mongo,infer,ai,dev,build,sb,sbdb,pr todo
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent kcomputer
+    class gh,app,mongo,infer,ai,build,sb,sbdb,pr todo
     linkStyle 0 stroke:#ff3554,stroke-width:2px
-    linkStyle 1 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 2 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 3 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 4 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 10 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 1 stroke:#fff,color:#fff
+    linkStyle 2 stroke:#fff,color:#fff
+    linkStyle 3 stroke:#fff,color:#fff
+    linkStyle 4 stroke:#fff,color:#fff
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**Your machine makes the agent computer.** Its own Nevia key, the secrets from `.env`, this code; the agent does the rest.
+**It starts on your machine.** You start the agent: it gets its own computer on Nevia, and does the rest from there.
 
 ---
 
@@ -481,46 +764,49 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class gh,app,mongo now
-    class you,agent done
-    class infer,ai,dev,build,sb,sbdb,pr todo
-    linkStyle 0 stroke:#4a6fa5
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app kcomputer
+    class gh,mongo kdb
+    class infer,ai,build,sb,sbdb,pr todo
+    linkStyle 0 stroke:#9aa5b8
     linkStyle 1 stroke:#ff3554,stroke-width:2px
     linkStyle 2 stroke:#ff3554,stroke-width:2px
     linkStyle 3 stroke:#ff3554,stroke-width:2px
-    linkStyle 4 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 10 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 4 stroke:#fff,color:#fff
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**A fresh stack, from the base branch.** The agent clones the app and recreates `acc-app` and `acc-mongo` from it: never an older version.
+**A fresh copy of the app.** The agent takes the app's latest code from GitHub, and runs it with its MongoDB and sample data.
 
 ---
 
@@ -537,46 +823,50 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class infer now
-    class you,agent,gh,app,mongo done
-    class ai,dev,build,sb,sbdb,pr todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app kcomputer
+    class gh,mongo kdb
+    class infer kai
+    class ai,build,sb,sbdb,pr todo
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
     linkStyle 4 stroke:#ff3554,stroke-width:2px
-    linkStyle 5 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 6 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 10 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 5 stroke:#fff,color:#fff
+    linkStyle 6 stroke:#fff,color:#fff
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**The AI sees the structure, not the values.** mongo2pg infers the schemas from `acc-mongo`; the sample values are stripped before the AI reads them.
+**First, understand the data.** mongo2pg looks at how the data is organised, never at the values themselves.
 
 ---
 
@@ -593,46 +883,50 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class ai,dev now
-    class you,agent,gh,app,mongo,infer done
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app kcomputer
+    class gh,mongo kdb
+    class infer,ai kai
     class build,sb,sbdb,pr todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
     linkStyle 5 stroke:#ff3554,stroke-width:2px
     linkStyle 6 stroke:#ff3554,stroke-width:2px
-    linkStyle 7 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 10 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 7 stroke:#fff,color:#fff
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**The AI changes the app.** As its own Unix user, with the `nevia` CLI to look around: JDBC instead of the driver, the seed data as SQL; it checks against a Postgres of its own.
+**The AI changes the code.** From the app's code and that analysis, it moves the app to PostgreSQL, without changing what the app does.
 
 ---
 
@@ -649,46 +943,50 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class build now
-    class you,agent,gh,app,mongo,infer,ai,dev done
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app,build kcomputer
+    class gh,mongo kdb
+    class infer,ai kai
     class sb,sbdb,pr todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
-    linkStyle 5 stroke:#4a6fa5
-    linkStyle 6 stroke:#4a6fa5
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
     linkStyle 7 stroke:#ff3554,stroke-width:2px
-    linkStyle 8 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 9 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 10 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 8 stroke:#fff,color:#fff
+    linkStyle 9 stroke:#fff,color:#fff
+    linkStyle 10 stroke:#fff,color:#fff
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**Built and tested.** `mvn package`, the tests included, on the agent computer.
+**Rebuilt and tested.** The new version of the app is built, and its tests must pass.
 
 ---
 
@@ -705,46 +1003,50 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class sb,sbdb now
-    class you,agent,gh,app,mongo,infer,ai,dev,build done
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app,build,sb kcomputer
+    class gh,mongo,sbdb kdb
+    class infer,ai kai
     class pr todo
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
-    linkStyle 5 stroke:#4a6fa5
-    linkStyle 6 stroke:#4a6fa5
-    linkStyle 7 stroke:#4a6fa5
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
+    linkStyle 7 stroke:#9aa5b8
     linkStyle 8 stroke:#ff3554,stroke-width:2px
     linkStyle 9 stroke:#ff3554,stroke-width:2px
     linkStyle 10 stroke:#ff3554,stroke-width:2px
-    linkStyle 11 stroke:#eeeeee,color:#d0d0d0
-    linkStyle 12 stroke:#eeeeee,color:#d0d0d0
+    linkStyle 11 stroke:#fff,color:#fff
+    linkStyle 12 stroke:#fff,color:#fff
 ```
 
-**A sandbox, beside the app.** A checkpoint of `acc-app` restored as `acc-app-RUN`, on a new Postgres with the seed data; the new jar must answer.
+**Tried for real.** A copy of the running app starts the new version, on its own PostgreSQL with the sample data: it must answer.
 
 ---
 
@@ -761,56 +1063,62 @@ flowchart LR
     mongo[("acc-mongo<br/>its MongoDB, seeded")]
     infer["mongo2pg infer<br/>without the values"]
     ai["the AI, as acc-ai<br/>changes code and tests"]
-    dev[("acc-app-db-RUN<br/>its own Postgres")]
-    build["mvn package<br/>with the tests"]
+    build["Build<br/>the app and its tests"]
     sb["acc-app-RUN<br/>sandbox, from a checkpoint"]
-    sbdb[("acc-pg-RUN<br/>with the seed data")]
-    pr["pull request<br/>agent/RUN"]
+    sbdb[("acc-pg-RUN<br/>the AI's postgres-init")]
+    pr["pull request<br/>from agent/RUN"]
     you -->|"computer, key,<br/>secrets, code"| agent
     gh -->|"clone"| agent
     agent -->|"recreates"| app
     app -.->|"chisel"| mongo
-    mongo -->|"samples"| infer
+    mongo -->|"samples, through<br/>a link"| infer
     infer -->|"schemas, read-only"| ai
-    ai -.->|"checks"| dev
+    gh -->|"the clone"| ai
     ai -->|"the change"| build
     app -->|"checkpoint"| sb
     build -->|"the jar"| sb
     sb --- sbdb
     sb -->|"/healthz and / answer"| pr
     pr -->|"opened, never merged"| gh
-    classDef now fill:#ff3554,stroke:#ff3554,color:#fff,stroke-width:2px
-    classDef done fill:#e8eef7,stroke:#4a6fa5,color:#1b2a41
-    classDef todo fill:#fff,stroke:#e6e6e6,color:#d0d0d0
-    class pr now
-    class you,agent,gh,app,mongo,infer,ai,dev,build,sb,sbdb done
-    linkStyle 0 stroke:#4a6fa5
-    linkStyle 1 stroke:#4a6fa5
-    linkStyle 2 stroke:#4a6fa5
-    linkStyle 3 stroke:#4a6fa5
-    linkStyle 4 stroke:#4a6fa5
-    linkStyle 5 stroke:#4a6fa5
-    linkStyle 6 stroke:#4a6fa5
-    linkStyle 7 stroke:#4a6fa5
-    linkStyle 8 stroke:#4a6fa5
-    linkStyle 9 stroke:#4a6fa5
-    linkStyle 10 stroke:#4a6fa5
+    classDef kyou fill:#fff,stroke:#1b2a41,color:#1b2a41,stroke-width:2px
+    classDef kcomputer fill:#fff,stroke:#1fa5a3,color:#1b2a41,stroke-width:2px
+    classDef kdb fill:#fff,stroke:#2e9e44,color:#1b2a41,stroke-width:2px
+    classDef kai fill:#fff,stroke:#6f64ff,color:#1b2a41,stroke-width:2px
+    classDef kresult fill:#fff,stroke:#e8833a,color:#1b2a41,stroke-width:2px
+    classDef todo fill:#fff,stroke:#fff,color:#fff
+    class you kyou
+    class agent,app,build,sb kcomputer
+    class gh,mongo,sbdb kdb
+    class infer,ai kai
+    class pr kresult
+    linkStyle 0 stroke:#9aa5b8
+    linkStyle 1 stroke:#9aa5b8
+    linkStyle 2 stroke:#9aa5b8
+    linkStyle 3 stroke:#9aa5b8
+    linkStyle 4 stroke:#9aa5b8
+    linkStyle 5 stroke:#9aa5b8
+    linkStyle 6 stroke:#9aa5b8
+    linkStyle 7 stroke:#9aa5b8
+    linkStyle 8 stroke:#9aa5b8
+    linkStyle 9 stroke:#9aa5b8
+    linkStyle 10 stroke:#9aa5b8
     linkStyle 11 stroke:#ff3554,stroke-width:2px
     linkStyle 12 stroke:#ff3554,stroke-width:2px
 ```
 
-**Only then, a pull request.** What changed, the analysis, the validation, a preview URL. You review and merge.
+**A pull request, for you to review.** Both versions stay online on Nevia, to compare side by side: today's app on MongoDB, the new one on PostgreSQL. You decide to merge.
 
 
 ---
 
+<!-- _class: text -->
+
 # 4. Validate, 5. cut over
 
-- **A sandbox**: a **checkpoint** of the running app restored beside it, on a new Postgres with the seed data;
-  the agent's jar must answer `/healthz` and `/`, and for a feature, its own check script
-- **Only then a pull request**: what changed, the analysis, the validation, a preview URL
-- **Cut over is yours**: merge, load the target with `final.sql`, switch the app's database
-- **Roll back** by pointing the app back: MongoDB was never touched, nothing migrated in place
+- **A sandbox**: the new app, beside the running one
+- **Then a pull request**, with a preview URL
+- **Cut over is yours**: merge, load, switch
+- **Roll back** anytime: MongoDB is never touched
 
 <!--
 The agents never merge and never cut over. They hand over artefacts (a PR, a SQL file, reports) that a team can
@@ -839,13 +1147,15 @@ Close the loop on the concepts: computers, branches, checkpoints and secrets, ea
 
 ---
 
+<!-- _class: text -->
+
 # What you get, and what is next
 
-- **Artefacts**: the loaded target, `final.sql`, post-import reports, a tested pull request, a run report with
-  times, all collected in `build/`
-- **Known limits**: inferred limits from samples, ObjectId-like ids, a few mongo2pg report quirks
-- **Next**: more apps and data sets, the cut-over itself as a step, the Nevia cost per migration in the report
-- **Try it**: `agent m2p setup && agent m2p run`, `agent acc setup && agent acc run migrate`
+- **You get**: the loaded target, `final.sql`, a tested PR
+- **Limits**: schemas inferred from samples
+- **Next**: more apps, the cut-over as a step
+- **Try m2p**: `agent m2p setup`, then `agent m2p run`
+- **Try acc**: `agent acc setup`, then `agent acc run migrate`
 
 <!--
 The whole path is reproducible, run after run, in a dedicated Nevia workspace.

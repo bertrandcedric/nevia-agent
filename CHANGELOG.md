@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- acc's `FEATURE.md`: the feature check's requests are built from the app's validation and its tests' examples,
+  and each read against the code that handles it, since the AI can't run the check; a check that relies on an
+  earlier request checks its status first (run 261030122635's check created a customer without its required
+  email, and failed on a 400).
 - Both agents' runs name the AI's files alike (`core.agent.ai`): `logs/ai-N.log`, `ai-N.jsonl`, `ai-N.json`
   per session (acc's `logs/ai.log` and `ai.jsonl` are `ai-1.*`, m2p's `logs/session-N.*` are `ai-N.*`), and
   `result.json` (`ai.total`, the sessions summed) and `report.md` at the run's root; acc's report's AI part is

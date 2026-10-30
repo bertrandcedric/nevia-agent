@@ -35,7 +35,10 @@ sh -n {{CHECK}}                         # the feature check's syntax: it runs on
    `https://app.example`), that proves the feature works on the sandbox. It calls the new or changed
    endpoints with curl, checks their status codes and answers (grep or jq), prints one line per check (`ok` or
    `FAIL` and what), and exits non-zero on a failure. It runs on a fork of the data: it may create, change or
-   delete. It gets no secret and no variable but `PATH` and `HOME`.
+   delete. It gets no secret and no variable but `PATH` and `HOME`. You can't run it, so every request it
+   sends must be one the application accepts: build its bodies from the code's validation (every required
+   field, in a valid form) and the existing tests' examples, not from guesses. A check that relies on an
+   earlier request (e.g. a create, before a count) checks that request's status first.
 
 After you, the pipeline builds the change, deploys it on a sandbox (a checkpoint of the running application,
 on a fork of its database: a copy of the current data, deleted after), checks `GET /healthz` and `GET /`, then
@@ -48,7 +51,8 @@ runs your feature check against it. If any of this fails, there is no pull reque
 2. Build it, in the style of the surrounding code, with unit tests next to the existing ones. Keep the HTTP
    API as it is for what the request does not change: same routes, status codes and JSON shapes. A user
    interface served by the application must keep working.
-3. Check it as above: the build, then the feature check written.
+3. Check it as above: the build, then the feature check written, and each of its requests read against the
+   code that handles it.
 4. Reply with the pull request, as "Your reply" below says.
 
 ## Your reply

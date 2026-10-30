@@ -62,10 +62,10 @@ database = "hello"       # also the Postgres database and schema mongo2pg loads 
 [m2p.seed]
 # What seed.py generates on the source computer when its MongoDB is empty; the same values give the
 # same documents. `python src/m2p/usecase/seed.py --help` describes them.
-customers = 5000
+customers = 500000
 seed = 42
 strange = 0.5              # percent of customers with anomalies of `strange_kinds` (0.1 of 5000 is 4 or 5: too few for every kind)
-strange_kinds = ["date-string", "bool-string"]   # [] for none, ["all"], or some of seed.py's kinds
+strange_kinds = ["date-string", "price-string"]   # [] for none, ["all"], or some of seed.py's kinds
 
 [m2p.postgres]
 name = "m2p-pg"          # the target; its URI in the workspace secret M2P_PG_URL
