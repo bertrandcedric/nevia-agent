@@ -27,9 +27,9 @@ reasoning_effort = "medium"          # low to max: lower is faster per turn, but
 max_turns = 150                      # per session
 
 [ai.copilot]
-version = "1.0.104"
+version = "1.0.105"
 # npm's integrity for @github/copilot-linux-x64, checked before installing.
-integrity = "sha512-HGxTAkwrlzIAoQRQ25uWoKToujHzmO1sKC0qGP/yQTv8UhWufHYGHKkHj4sjEbHhRqwXfZvcUzKL9t/vUtklFg=="
+integrity = "sha512-3trlyisQQAnlNy3CvYVRDVWC/WK+0CfDId7dDwNbxTFJ9IgM3aoCPyg+QbGPBUeuYNs4sjgtTqFn5l5yfyHVDg=="
 gateway_url = "https://ai.aiven.io/v1"   # OpenAI-compatible
 model = "gpt-6.1-sol"
 reasoning_effort = "medium"          # none to max: lower is faster per turn, but may need more tries
@@ -46,6 +46,7 @@ cache_gb = 0.25          # WiredTiger's cache: uncapped, mongod outgrows a 2 GiB
 # The release both agents run: m2p loads with it, acc analyses the app's data with it.
 repo = "https://github.com/pmpetit/mongo2pg.git"
 release = "mongo2pg-v0.8.0"   # its linux-x86_64 binary, checked against GitHub's sha256
+sample_percent = 1            # of each collection, that m2p's infer reads to work out the model (not init's 1000 documents)
 
 # ======================================================================================================
 # m2p: an agent loop works out how to load the hello MongoDB into PostgreSQL with mongo2pg.
@@ -62,9 +63,9 @@ database = "hello"       # also the Postgres database and schema mongo2pg loads 
 [m2p.seed]
 # What seed.py generates on the source computer when its MongoDB is empty; the same values give the
 # same documents. `python src/m2p/usecase/seed.py --help` describes them.
-customers = 500000
+customers = 5000
 seed = 42
-strange = 0.5              # percent of customers with anomalies of `strange_kinds` (0.1 of 5000 is 4 or 5: too few for every kind)
+strange = 0.5              # percent of customers with anomalies of `strange_kinds` (too few strange customers may miss a kind: seed.py warns)
 strange_kinds = ["date-string", "price-string"]   # [] for none, ["all"], or some of seed.py's kinds
 
 [m2p.postgres]
@@ -81,7 +82,7 @@ sessions = 3             # AI sessions in a run, if one stops before DONE.md
 # ======================================================================================================
 
 [acc.nevia]
-workspace = "acc"        # its own: its agent's key, an editor's (its AI's too), reaches nothing else
+workspace = "acc"        # its own: its agent's key (an editor's) and its AI's (a viewer's) reach nothing else
 
 [acc.repo]
 # The app the agent changes: a Maven project whose application.properties has database.kind = mongo or
@@ -94,7 +95,7 @@ base_branch = "main"
 computer = "acc-app"
 port = 8080
 jdk = 21
-maven = "3.9.12"
+maven = "3.9.16"
 
 [acc.mongo]
 # The app's MongoDB, with its seed data (local/mongo-init/*.js); a run's fork is <computer>-<run>.
@@ -107,6 +108,10 @@ version = "1.10.1"
 
 [acc.postgres]
 name = "acc-pg"          # the app's Postgres once it runs on one; a sandbox's is <name>-<run>
+# The app's DATABASE_URL (the stack's and the sandbox's) through the database's pooler (port 6432, transaction
+# pooling), with prepareThreshold=0 for JDBC (the seed data's psql goes through it without); the AI's own
+# Postgres doesn't.
+pooler = false
 
 [acc.agent]
 computer = "acc-agent"
@@ -119,5 +124,5 @@ allowed_tools = [
     "Bash(diff:*)", "Bash(sleep:*)", "Bash(echo:*)", "Bash(unzip:*)", "Bash(kill:*)", "Bash(pkill:*)",
     "Bash(grep:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(wc:*)", "Bash(sort:*)",   # in pipes too
     "Bash(sh:*)", "Bash(python3:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(find:*)",   # it runs mvn anyway, as its own user
-    "Bash(nevia:*)",   # the Nevia CLI, signed in with the agent's key
+    "Bash(nevia:*)",   # the Nevia CLI, signed in with a viewer's key of its own: it only looks
 ]

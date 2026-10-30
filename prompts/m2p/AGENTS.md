@@ -29,19 +29,28 @@ say why in `ATTEMPTS.md`.
 
 ## Running mongo2pg
 
+mongo2pg's model of the source is already there, in `tries/model/`: the pipeline ran `infer` once at the
+start of the run, from a sample of {sample}% of each collection, before your first session. It is read-only.
+Never run `infer`, and never change the sampling (`number`, `percent`) in a config: every try starts from that
+model.
+
 A load is these steps, each in the background with its output in the project's directory, for a project
 NAME in `tries/NAME/` (its config is `tries/NAME/config/NAME.toml`, written by `init`):
 
 ```
 bin/mongo2pg init --project-base ~/{dir}/tries --project-name NAME --namespace {namespace} \
   --source-uri 'mongodb://127.0.0.1:27017/?directConnection=true' --target-uri "$(cat URI_FILE)"
-bin/mongo2pg infer -c tries/NAME/config/NAME.toml    # samples MongoDB, writes the DDL and mappings
+cp -r tries/model/source tries/model/schema tries/NAME/ && chmod -R u+w tries/NAME   # the model (try1), or
+                                                    # the try before's source/ and schema/ (with its changes)
+bin/mongo2pg to-pg -c tries/NAME/config/NAME.toml --schema {namespace}   # only after a mapping changed
 bin/mongo2pg export -c tries/NAME/config/NAME.toml   # MongoDB to CSV files in tries/NAME/data/
 bin/mongo2pg import -c tries/NAME/config/NAME.toml   # creates the tables and loads the CSV files
 bin/mongo2pg report -c tries/NAME/config/NAME.toml --post-import
 ```
 
-`URI_FILE` is the file `tools/branch.sh` printed; for `{pg}`, use `--target-uri "$DATABASE_URL"`.
+`URI_FILE` is the file `tools/branch.sh` printed; for `{pg}`, use `--target-uri "$DATABASE_URL"`. `try1`
+copies `tries/model/`; each later try copies the try before's `source/` and `schema/`, then makes its own
+change (`to-pg` writes the DDL again from the mappings, when one changed).
 
 ## Checking a load
 

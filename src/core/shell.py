@@ -28,9 +28,6 @@ def redact(text: str) -> str:
 
 class CommandError(RuntimeError):
     def __init__(self, args: Sequence[str], code: int, stderr: str) -> None:
-        self.args_ = list(args)
-        self.code = code
-        self.stderr = stderr
         super().__init__(f"{args[0]} exited {code}: {stderr.strip()[-500:]}")
 
 

@@ -4,7 +4,9 @@
 # installs uv, then this Python and the requirements into ~/.nevia-agent/venv when they changed, the nevia CLI
 # into ~/.local/bin, signed in with the computer's key file (KEY_PATH, under the home) in WORKSPACE, and writes
 # ~/.nevia-agent/bin/agent: the `agent` CLI here, with the same key file (the key itself never goes in it).
+# The CLI is pinned (NEVIA_VERSION): it offers no newer release, here or from `agent`.
 set -euo pipefail
+export NEVIA_NO_UPDATE_CHECK=1
 uv=${1:?usage: setup-runtime.sh UV_VERSION PYTHON NEVIA_VERSION WORKSPACE COMPUTER KEY_PATH} python=$2
 nevia=$3 workspace=$4 computer=$5 key=$6
 home=$HOME/.nevia-agent
@@ -38,7 +40,8 @@ rm -rf "$new" "$home/bundle.tgz"
 
 cat > "$home/bin/agent" <<EOF
 #!/usr/bin/env bash
-export PYTHONPATH=$home/src AGENT_COMPUTER=$computer NEVIA_KEY_FILE=$HOME/$key PATH=$HOME/.local/bin:\$PATH
+export PYTHONPATH=$home/src AGENT_COMPUTER=$computer NEVIA_KEY_FILE=$HOME/$key NEVIA_NO_UPDATE_CHECK=1
+export PATH=$HOME/.local/bin:\$PATH
 exec $home/venv/bin/python -m core "\$@"
 EOF
 chmod 755 "$home/bin/agent"

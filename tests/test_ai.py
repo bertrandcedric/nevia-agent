@@ -3,9 +3,10 @@ from pathlib import Path
 
 from core.agent import ai
 from core.config import Ai
-from m2p import config
+from core.results import cost_suffix
+from m2p.config import Settings
 
-AI = config.load().ai
+AI = Settings.load().ai
 COPILOT = AI.model_copy(update={"engine": "copilot"})
 
 
@@ -48,7 +49,32 @@ def test_copilot_result_is_in_claude_codes_shape() -> None:
 
 def test_both_renders_are_bundled() -> None:
     tools = ai.tools()
-    assert ai.render(AI) in tools and ai.render(COPILOT) in tools and b'include "common"' in tools[ai.render(AI)]
+    assert ai.render(AI) in tools and ai.render(COPILOT) in tools and b'include "common"' in tools[ai.render(AI)][0]
+    assert {mode for _, mode in tools.values()} == {"444"}  # read-only
+
+
+def test_a_session_keeps_its_result_next_to_its_log(tmp_path: Path, monkeypatch) -> None:
+    end = {"type": "result", "subtype": "success", "result": "x", "total_cost_usd": 1.234}
+
+    def session(cmd, *, cwd, env, render, log) -> int:
+        log.with_suffix(".jsonl").write_text(f"junk\n{json.dumps(end)}\n")
+        return 3
+
+    monkeypatch.setattr(ai, "session", session)
+    log = tmp_path / "ai-1.log"
+    assert ai.run_session(AI, ["x"], cwd=tmp_path, env={}, render=tmp_path / "r.jq", log=log) == (3, end)
+    assert json.loads(log.with_suffix(".json").read_text()) == end
+    monkeypatch.setattr(ai, "session", lambda cmd, *, cwd, env, render, log: 1)
+    log = tmp_path / "ai-2.log"
+    log.with_suffix(".jsonl").write_text("stderr only\n")
+    assert ai.run_session(AI, ["x"], cwd=tmp_path, env={}, render=tmp_path / "r.jq", log=log) == (1, None)
+    assert not log.with_suffix(".json").exists()
+
+
+def test_the_cost_of_a_log_line_has_two_decimals_and_none_without_it() -> None:
+    assert cost_suffix({"total_cost_usd": 1.234}) == ", $1.23"
+    assert cost_suffix({"total_cost_usd": 2.468}, "Claude Code") == ", Claude Code $2.47"
+    assert cost_suffix({"num_turns": 1}, "GitHub Copilot CLI") == cost_suffix(None) == ""
 
 
 def test_total_sums_the_sessions_and_keeps_the_last_end() -> None:

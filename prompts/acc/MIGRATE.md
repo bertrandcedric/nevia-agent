@@ -23,8 +23,10 @@ own and becomes a pull request.
   check them. Drop and recreate its tables as you need.
 - **Your tools**: files with Read, Edit and Write; a shell with `mvn`, `java`, `psql`, `curl` and the usual
   read-only commands. You run as your own user, in this run's directory and `/tmp`.
-- **`nevia`**: the Nevia CLI, signed in for this workspace, as the pipeline is. `nevia --help` lists what it
-  can do, e.g. `nevia ls`, `nevia pg ls`, `nevia exec <computer> -- <command>`.
+- **`nevia`**: the Nevia CLI, signed in for this workspace with a key of your own that can only look: list and
+  inspect computers, databases, checkpoints and operations, e.g. `nevia ls`, `nevia status <computer>`,
+  `nevia pg ls`, `nevia ops`. It can't run commands on a computer, read a database's connection or change
+  anything.
 
 ## Commands
 
@@ -77,7 +79,8 @@ database URI at `${DATABASE_URL}`, and a key for the certificate that may be emp
 
 - `DATABASE_URL`: a libpq-style URI, `postgres://user:password@host:port/database?sslmode=require`, which
   JDBC cannot take as is. Convert it to `jdbc:postgresql://host:port/database` plus user and password
-  properties (they are URL-encoded in the URI).
+  properties (they are URL-encoded in the URI), and pass its other query parameters but `sslmode` on as JDBC
+  properties (e.g. `prepareThreshold=0`, when it goes through a connection pooler).
 - `PG_CA_FILE`: the path of the server certificate, relative to the sources directory. When it is set,
   verify the server with `sslmode=verify-full` and `sslrootcert`; otherwise `sslmode=require`.
 
@@ -169,5 +172,5 @@ the commands you ran and what they returned
 - Write files with the Write and Edit tools, not shell heredocs or scripts that write them; run one command
   per Bash call, without `&&` or `;` chains: the others ask for an approval nobody gives here.
 - Change only the repository; the analysis is read-only.
-- Don't create, change or delete anything on Nevia with `nevia`: the pipeline makes and deletes the stack, the
-  sandbox and the databases. Look only.
+- Don't try to create, change or delete anything on Nevia with `nevia` (your key can't): the pipeline makes and
+  deletes the stack, the sandbox and the databases. Look only.

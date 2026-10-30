@@ -53,9 +53,6 @@ class _Collection:
     def __init__(self) -> None:
         self.docs: list[dict] = []
 
-    def drop(self) -> None:
-        self.docs.clear()
-
     def insert_many(self, docs: list[dict], ordered: bool) -> None:
         self.docs.extend(docs)
 
@@ -71,7 +68,14 @@ def _seed(monkeypatch, *args: str) -> list[dict]:
             pass
 
         def __enter__(self):
-            return {"hello": {"customers": customers}}
+            return self
+
+        def __getitem__(self, db: str) -> dict:
+            return {"customers": customers}
+
+        def drop_database(self, db: str) -> None:
+            assert db == "hello"
+            customers.docs.clear()
 
         def __exit__(self, *_exc) -> None:
             pass

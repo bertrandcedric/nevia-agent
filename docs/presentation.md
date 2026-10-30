@@ -17,15 +17,35 @@ Animated diagrams: the slides whose comment reads "animation: m2p, frame N/9" (a
 consecutive slides, a click apart, and so in PowerPoint too (make_pptx.py): one slide per frame, with no
 transition, so that going back a step is going back a slide. A box keeps its colour, its kind's, in every frame; the step
 a frame shows has its arrows in red, and what is still to come is hidden. The layout is the same in every frame.
+
+The PowerPoint's text is all here too: what only it shows is in the comments that start with `pptx` (Marp draws
+no comment; they are not the PowerPoint's speaker's notes), one `key: value` per line, split on the first ": ". The
+first one, below, is the deck's (footer, legend.<kind>, closing, closing-notes); then one per slide: eyebrow,
+title and kicker (the cover's), layout (triangle, runs; none for text or a table), and per frame eyebrow,
+title and caption. A diagram's words: box.<id> as `name | detail`, edge.<from>-<to>, badge.<id>, step.<n>,
+link.before and link.after, agent.<acc|m2p>; an animation's are in its frame 1's. make_pptx.py lays them out,
+and stops at a key it needs and doesn't find.
+-->
+
+<!-- pptx
+footer: From MongoDB to PostgreSQL, with AI agents on Nevia
+legend.you: Your machine
+legend.computer: Compute
+legend.db: Data
+legend.ai: AI
+legend.result: Result
+closing: THANK YOU
+closing-notes: agent m2p setup && agent m2p run; agent acc setup && agent acc run migrate
+-->
+
+<!-- pptx
+title: FROM MONGODB TO POSTGRESQL
+kicker: NEVIA · TWO AI AGENTS · M2P AND ACC
 -->
 
 # From MongoDB to PostgreSQL
 
 ### A path for the migration, with two AI agents on Nevia
-
-- **Nevia** gives them computers, databases and branches to work on
-- **m2p** (Mongo to Postgres) moves the data, **acc** (application code changer) moves the code
-- You review the evidence, and decide
 
 <!--
 The promise: a migration that is evidence-driven at every step, where the agents do the tedious work on
@@ -35,6 +55,10 @@ throwaway infrastructure, and a person keeps the decisions (merge, cut over).
 ---
 
 <!-- _class: text -->
+
+<!-- pptx
+eyebrow: THE PROBLEM
+-->
 
 # Why it is hard
 
@@ -50,11 +74,15 @@ make: that is where Nevia comes in.
 
 ---
 
+<!-- pptx
+eyebrow: NEVIA
+-->
+
 # Nevia, in five concepts
 
 | Concept | What it is |
 | --- | --- |
-| **Computer** | a Linux machine in seconds, with an HTTPS URL; it sleeps when idle, wakes on demand |
+| **Computer** | a Linux machine in seconds. It sleeps when idle, wakes on demand |
 | **Postgres** | a managed database, with its connection in a workspace secret |
 | **Branch** | a copy of a database, or of a computer's disks, made in seconds: a fork of its data |
 | **Checkpoint** | a capture of a running computer, restored as a new one: the same app, side by side |
@@ -71,13 +99,15 @@ same surface, which is what makes agents possible.
 
 <!-- _class: text -->
 
+<!-- pptx
+eyebrow: NEVIA
+-->
+
 # Why Nevia helps a migration
 
-- **Throwaway is cheap**: a branch per try
-- **The real app, beside itself**: a sandbox from a checkpoint
-- **Agents get an API**: their own computer and key
-- **Secrets stay out of reach**: never in prompts or files
-- **You pay for what runs**: idle computers sleep
+- **Try as often as needed**: each try gets its own copy of the database, deleted after
+- **Test the new app next to the old one**: a copy of the running app, on a copy of its data
+- **Each agent works on its own**: its own computer
 
 <!--
 Each of these maps to a step of the path: branches for the data's tries, checkpoints for the code's sandbox,
@@ -86,13 +116,26 @@ secrets and keys for running agents safely.
 
 ---
 
+<!-- pptx
+eyebrow: THE MIGRATION
+layout: triangle
+box.app: The app | its code, its API
+box.mongo: MongoDB | the source
+box.pg: PostgreSQL | the target
+box.assess: Assessment | mongo2pg: types, a model
+link.before: today
+link.after: after
+agent.acc: acc · moves the code | JDBC, tested in a sandbox
+agent.m2p: m2p · moves the data | tries on branches, checked row by row
+-->
+
 # The migration, in one picture
 
 ![h:400](migration.svg)
 
-- **m2p**, Mongo to Postgres: the agent that migrates the data
-- **acc**, application code changer: the agent that changes the app's code
 - **mongo2pg** assesses MongoDB first: both agents start from its analysis
+- **m2p**, Mongo to Postgres: the agent that migrates the data
+- **acc**, Application Code Changer: the agent that changes the app's code
 - **You** validate, and cut over
 
 <!--
@@ -104,9 +147,13 @@ hints to check, not rules. Its warnings become a to-do list for both agents.
 
 <!-- _class: text -->
 
-# 2. Move the data: m2p
+<!-- pptx
+eyebrow: THE DATA · M2P
+-->
 
-- **m2p, Mongo to Postgres**: an AI agent that migrates the data
+# 2. Move the data: Mongo to Postgres => m2p
+
+- **m2p**: an AI agent that migrates the data
 - **One try, one branch** of the target Postgres
 - **Checked by mongo2pg**: row counts and checksums
 - **Fix the data first**, the model only if needed
@@ -120,6 +167,39 @@ that loop cheap enough to run unattended.
 ---
 
 <!-- animation: m2p, frame 1/9 -->
+
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **1/9 · It starts on your machine.** You start the agent: it gets its own computer on Nevia, and does the rest from there.
+box.you: Your machine | agent m2p
+box.agent: m2p-agent | the AI agent, mongo2pg
+box.mongo: m2p-mongo | MongoDB and its data
+box.pg: m2p-pg | the target
+box.infer: mongo2pg infer | a model, warnings
+box.try1: m2p-try1 | a new branch
+box.fix1: Analyse, fix | SQL, or the model
+box.try2: m2p-try2 | a new branch
+box.fix2: Analyse, fix | SQL, or the model
+box.try3: m2p-try3 | a new branch
+box.finish: final.sql | DONE.md, the tries
+edge.pg-try1: `branch.sh 1`
+edge.pg-try2: `branch.sh 2`
+edge.pg-try3: `branch.sh 3`
+badge.try1: FAILS
+badge.try2: FAILS
+badge.try3: PASSES
+badge.pg: LOADED
+step.1: 1 · start
+step.2: 2 · source, target
+step.3: 3 · analyse
+step.4: 4 · try 1
+step.5: 5 · fix
+step.6: 6 · try 2
+step.7: 7 · fix
+step.8: 8 · try 3
+step.9: 9 · done
+-->
 
 # m2p, step by step: 1/9
 
@@ -181,6 +261,12 @@ flowchart LR
 
 <!-- animation: m2p, frame 2/9 -->
 
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **2/9 · A source and a target.** The agent sets up MongoDB with the data to move, and an empty PostgreSQL to receive it.
+-->
+
 # m2p, step by step: 2/9
 
 ```mermaid
@@ -241,6 +327,12 @@ flowchart LR
 ---
 
 <!-- animation: m2p, frame 3/9 -->
+
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **3/9 · First, understand the data.** mongo2pg looks at a sample of MongoDB, and proposes how to store it in PostgreSQL.
+-->
 
 # m2p, step by step: 3/9
 
@@ -304,6 +396,12 @@ flowchart LR
 
 <!-- animation: m2p, frame 4/9 -->
 
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **4/9 · A first try, on a copy.** The data goes into a fresh copy of the target, made in seconds. The check finds differences: it fails.
+-->
+
 # m2p, step by step: 4/9
 
 ```mermaid
@@ -365,6 +463,12 @@ flowchart LR
 ---
 
 <!-- animation: m2p, frame 5/9 -->
+
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **5/9 · Find out why, and fix it.** The AI reads what went wrong, and corrects how the data is converted; it changes the tables only if it must.
+-->
 
 # m2p, step by step: 5/9
 
@@ -428,6 +532,12 @@ flowchart LR
 
 <!-- animation: m2p, frame 6/9 -->
 
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **6/9 · A second try, on a new copy.** The fix is tried on another fresh copy. Not right yet.
+-->
+
 # m2p, step by step: 6/9
 
 ```mermaid
@@ -489,6 +599,12 @@ flowchart LR
 ---
 
 <!-- animation: m2p, frame 7/9 -->
+
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **7/9 · Another look, another fix.** The AI finds the next problem, and corrects it.
+-->
 
 # m2p, step by step: 7/9
 
@@ -552,6 +668,12 @@ flowchart LR
 
 <!-- animation: m2p, frame 8/9 -->
 
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **8/9 · The third try passes.** Every table matches the source, row for row. Each try is kept, as proof.
+-->
+
 # m2p, step by step: 8/9
 
 ```mermaid
@@ -613,6 +735,12 @@ flowchart LR
 ---
 
 <!-- animation: m2p, frame 9/9 -->
+
+<!-- pptx
+eyebrow: M2P · STEP BY STEP
+title: How m2p works, step by step
+caption: **9/9 · Done.** The data is in PostgreSQL, and you get the report and the SQL that did it.
+-->
 
 # m2p, step by step: 9/9
 
@@ -677,10 +805,14 @@ flowchart LR
 
 <!-- _class: text -->
 
-# 3. Move the code: acc
+<!-- pptx
+eyebrow: THE CODE · ACC
+-->
 
-- **acc, application code changer**: an AI agent that changes the app's code
-- **The AI rewrites the app**: JDBC, normalized tables
+# 3. Move the code: application code changer => acc
+
+- **acc**: an AI agent that changes the app's code
+- **The AI rewrites the app**: Java code, JDBC, normalized tables ...
 - **The API stays as it is**
 - **The seed data moves too**, as SQL
 - **Tested** on a Postgres of its own
@@ -694,6 +826,32 @@ pipeline serves the migration and the product work around it.
 ---
 
 <!-- animation: acc, frame 1/7 -->
+
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **1/7 · It starts on your machine.** You start the agent: it gets its own computer on Nevia, and does the rest from there.
+box.you: Your machine | agent acc
+box.agent: acc-agent | runs the run
+box.gh: GitHub | clone of the app
+box.app: acc-app | the app, from main
+box.mongo: acc-mongo | its MongoDB, seeded
+box.infer: mongo2pg infer | without the values
+box.ai: acc-ai | the AI: code, tests
+box.build: Build | the app and its tests
+box.sb: acc-app-RUN | from a checkpoint
+box.sbdb: acc-pg-RUN | the AI's postgres-init
+box.pr: Pull request | from agent/RUN
+badge.app: LIVE
+badge.sb: LIVE
+step.1: 1 · start
+step.2: 2 · a fresh stack
+step.3: 3 · analyse
+step.4: 4 · change
+step.5: 5 · build
+step.6: 6 · sandbox
+step.7: 7 · pull request
+-->
 
 # acc, step by step: 1/7
 
@@ -753,6 +911,12 @@ flowchart LR
 
 <!-- animation: acc, frame 2/7 -->
 
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **2/7 · A fresh copy of the app.** The agent takes the app's latest code from GitHub, and runs it with its MongoDB and sample data.
+-->
+
 # acc, step by step: 2/7
 
 ```mermaid
@@ -811,6 +975,12 @@ flowchart LR
 ---
 
 <!-- animation: acc, frame 3/7 -->
+
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **3/7 · First, understand the data.** mongo2pg looks at how the data is organised, never at the values themselves.
+-->
 
 # acc, step by step: 3/7
 
@@ -872,6 +1042,12 @@ flowchart LR
 
 <!-- animation: acc, frame 4/7 -->
 
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **4/7 · The AI changes the code.** From the app's code and that analysis, it moves the app to PostgreSQL, without changing what the app does.
+-->
+
 # acc, step by step: 4/7
 
 ```mermaid
@@ -931,6 +1107,12 @@ flowchart LR
 ---
 
 <!-- animation: acc, frame 5/7 -->
+
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **5/7 · Rebuilt and tested.** The new version of the app is built, and its tests must pass.
+-->
 
 # acc, step by step: 5/7
 
@@ -992,6 +1174,12 @@ flowchart LR
 
 <!-- animation: acc, frame 6/7 -->
 
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **6/7 · Tried for real.** A copy of the running app starts the new version, on its own PostgreSQL with the sample data: it must answer.
+-->
+
 # acc, step by step: 6/7
 
 ```mermaid
@@ -1051,6 +1239,12 @@ flowchart LR
 ---
 
 <!-- animation: acc, frame 7/7 -->
+
+<!-- pptx
+eyebrow: ACC · STEP BY STEP
+title: How acc works, step by step
+caption: **7/7 · A pull request, for you to review.** Both versions stay online on Nevia, to compare side by side: today's app on MongoDB, the new one on PostgreSQL. You decide to merge.
+-->
 
 # acc, step by step: 7/7
 
@@ -1113,6 +1307,10 @@ flowchart LR
 
 <!-- _class: text -->
 
+<!-- pptx
+eyebrow: VALIDATE, CUT OVER
+-->
+
 # 4. Validate, 5. cut over
 
 - **A sandbox**: the new app, beside the running one
@@ -1127,6 +1325,16 @@ review with its usual tools.
 
 ---
 
+<!-- pptx
+eyebrow: HOW IT RUNS
+layout: runs
+box.you: Your machine | agent m2p | acc
+box.agent: Agent computer | this code, an AI agent
+box.rest: Everything else | MongoDB, Postgres, branches, sandboxes, PRs
+edge.you-agent: computer, key, secrets
+edge.agent-rest: makes and deletes
+-->
+
 # How it runs
 
 ```mermaid
@@ -1136,8 +1344,8 @@ flowchart LR
     agent -- "makes and deletes" --> rest["MongoDB, Postgres, branches,<br/>checkpoints, sandboxes, PRs"]
 ```
 
-- **Your machine** only makes the agent computer; the agent does the rest, with its own Nevia key
-- **Claude Code or Copilot CLI**, one setting; models through the Aiven AI gateway; both drive Nevia
+- **Your machine** only makes the agent computer; the agent does the rest
+- **Claude Code or Copilot CLI**, one setting; models through the `Aiven AI gateway`; both drive Nevia
   with the `nevia` CLI, the AI included, signed in with the agent's key
 - **One workspace, two agents**: every name carries its agent (`m2p-…`, `acc-…`), and only those are deleted
 
@@ -1149,11 +1357,15 @@ Close the loop on the concepts: computers, branches, checkpoints and secrets, ea
 
 <!-- _class: text -->
 
+<!-- pptx
+eyebrow: WHAT NEXT
+-->
+
 # What you get, and what is next
 
-- **You get**: the loaded target, `final.sql`, a tested PR
-- **Limits**: schemas inferred from samples
-- **Next**: more apps, the cut-over as a step
+- **You get**: your data in PostgreSQL, the SQL that loaded it, and a tested pull request
+- **The limit**: the tables are worked out from a sample of the data
+- **Next**: more apps, and the switch to PostgreSQL as one more step
 - **Try m2p**: `agent m2p setup`, then `agent m2p run`
 - **Try acc**: `agent acc setup`, then `agent acc run migrate`
 

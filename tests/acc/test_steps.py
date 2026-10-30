@@ -8,14 +8,22 @@ import httpx
 import pytest
 
 from acc import steps
-from acc.agent import pack
 from acc.config import Settings
+from acc.stack import pack
+
+
+@pytest.fixture
+def ai_home(monkeypatch) -> None:
+    """The AI's user, its home /home/acc-ai."""
+    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-ai"})())
 
 
 def test_db_kind_is_the_last_database_kind() -> None:
     assert steps.db_kind("a=1\ndatabase.kind = mongo \n") == "mongo"
     assert steps.db_kind("database.kind: mongo\ndatabase.kind=postgres\n") == "postgres"
-    assert steps.db_kind("other=1\n") == ""
+    for wrong in ("other=1\n", "database.kind = mysql\n"):
+        with pytest.raises(RuntimeError, match=r"database\.kind must be mongo or postgres"):
+            steps.db_kind(wrong)
 
 
 def test_the_analysis_loses_its_sample_values(tmp_path: Path) -> None:
@@ -40,9 +48,8 @@ def test_pg_env_decodes_the_uri() -> None:
 
 
 def test_the_ai_runs_as_its_user_with_the_names_of_its_env_not_their_values(
-    settings: Settings, tmp_path: Path, monkeypatch
+    settings: Settings, tmp_path: Path, ai_home: None
 ) -> None:
-    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-ai"})())
     (tmp_path / "prompt.md").write_text("the task")
     cmd = steps.ai_command(settings, tmp_path, {"ANTHROPIC_AUTH_TOKEN": "s3cr3t", "PGPASSWORD": "pw"})
     assert cmd[:5] == ["sudo", "-n", "-u", "acc-ai", "-H"]
@@ -50,6 +57,7 @@ def test_the_ai_runs_as_its_user_with_the_names_of_its_env_not_their_values(
     assert "s3cr3t" not in " ".join(cmd) and "pw" not in cmd  # in the env sudo keeps, never in the command line
     assert "/home/acc-ai/.local/bin/claude" in cmd and "the task" in cmd
     assert cmd[cmd.index("--allowedTools") + 1] == ",".join(settings.agent.allowed_tools)
+    assert "NEVIA_NO_UPDATE_CHECK=1" in cmd[: cmd.index("/home/acc-ai/.local/bin/claude")]  # in `env`, before the AI
 
 
 def test_app_jar_is_the_runnable_one(tmp_path: Path) -> None:
@@ -101,14 +109,19 @@ def test_the_pull_request_follows_a_redirect_and_finds_an_open_one(monkeypatch) 
         steps.pull_request("o/r", "agent/1", "main", "T\nB", http=_github(refused))
 
 
-def test_the_ai_gets_the_cli_and_a_copy_of_the_key_of_its_own(settings: Settings, monkeypatch) -> None:
-    monkeypatch.setattr(pwd, "getpwnam", lambda _user: type("P", (), {"pw_dir": "/home/acc-ai"})())
+def test_the_ai_gets_the_cli_and_a_viewer_s_key_of_its_own(settings: Settings, ai_home: None, monkeypatch) -> None:
     ran: list[list[str]] = []
     monkeypatch.setattr(steps, "run", lambda args, **_kw: ran.append(args) or "")
     steps.lend_nevia(settings)
-    key = f"/home/acc-ai/{settings.agent.key_path}"
+    a = settings.agent
+    key = f"/home/acc-ai/{a.ai_key_path}"
+    assert a.ai_key_path != a.key_path
+    assert ran[0] == ["sudo", "-n", "rm", "-f", f"/home/acc-ai/{a.key_path}"]  # the agent's, lent before
+    ran = ran[1:]
     assert ran[0] == ["sudo", "-n", "mkdir", "-p", "/home/acc-ai/.local/bin", str(Path(key).parent)]
     assert ran[1] == ["sudo", "-n", "chown", "-R", "acc-ai:acc-ai", "/home/acc-ai/.config", "/home/acc-ai/.local"]
     assert ran[2][-4:] == ["-m", "755", f"{steps.HOME}/.local/bin/nevia", "/home/acc-ai/.local/bin/nevia"]
-    assert "-D" not in ran[2] and ran[3][-3:] == ["600", f"{steps.HOME}/{settings.agent.key_path}", key]
+    assert "-D" not in ran[2] and ran[3][-3:] == ["600", f"{steps.HOME}/{a.ai_key_path}", key]
     assert f"auth use-key-file {key}" in ran[4][-1] and "workspace use acc" in ran[4][-1]
+    assert "NEVIA_NO_UPDATE_CHECK=1" in ran[4]
+    assert not any(a.key_path in arg for cmd in ran for arg in cmd)  # the agent's key: never lent

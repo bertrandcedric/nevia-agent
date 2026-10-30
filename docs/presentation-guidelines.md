@@ -20,8 +20,11 @@ follow for the next one.
 - **Plain words in the captions**: no resource names, file names or commands; say what happens and why
   ("a fresh copy of the target", not "`m2p-try2`, a branch made by `branch.sh 2`"). Prefer the general case
   to an invented example.
-- **Spread out**: a text-only slide has its title at the top and its bullets spread over the rest of the height
-  (in Marp, `<!-- _class: text -->` with the deck's `section.text` style), not packed in the middle.
+- **Use the whole slide**: a text-only slide has its title at the top and its bullets spread evenly over the
+  rest of the height, from under the title to above the footer, with the same space above, between and below
+  them, not packed at the top with the bottom left empty. Its text is as large as fits (up to 20 pt, with a
+  third of the height or so left as space), not the template's body size. In Marp, `<!-- _class: text -->` with
+  the deck's `section.text` style (`space-evenly`); in the PowerPoint, `make_pptx.py`'s `spread_into`.
 
 ## Diagrams
 
@@ -53,6 +56,9 @@ follow for the next one.
 
 ## The file
 
+- **All the text lives in presentation.md**, the PowerPoint's own (eyebrows, footer, diagram labels, captions)
+  in its `pptx` comments; `make_pptx.py` only lays it out (geometry, colours, kinds, styling), and stops at a
+  missing key.
 - Keep only the template's layouts the deck uses: Keynote warns about the others ("unsupported media").
 - The brand fonts (Inter, Geist Mono, Funnel Display) must be installed where the deck is opened; after
   installing them, restart Keynote or PowerPoint.

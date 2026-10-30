@@ -1,21 +1,24 @@
 """What a run writes: the pull request's text from the AI's reply, and the run's report. `ai` is the AI's name
-(`Ai.name`), and its result is in Claude Code's shape (`core.agent.ai.result`)."""
+(`Ai.name`), but in a pull request's `Validation` its settings, and its result is in Claude Code's shape
+(`core.agent.ai.result`)."""
 
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.agent import ai
+from core.config import Ai, Engine
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-LINKS = {
-    "Claude Code": "https://claude.com/claude-code",
-    "GitHub Copilot CLI": "https://github.com/features/copilot/cli",
+LINKS: dict[Engine, str] = {  # by engine, as their names (`core.config.ENGINES`)
+    "claude": "https://claude.com/claude-code",
+    "copilot": "https://github.com/features/copilot/cli",
 }
 
 
-def footer(ai: str) -> str:
-    return f"\n---\nProposed by {ai} running on a Nevia computer.\n\n🤖 Generated with [{ai}]({LINKS[ai]})\n"
+def footer(ai: Ai) -> str:
+    return (f"\n---\nProposed by {ai.name} running on a Nevia computer.\n\n"
+            f"🤖 Generated with [{ai.name}]({LINKS[ai.engine]})\n")  # fmt: skip
 
 
 class NoProposal(RuntimeError):
@@ -61,7 +64,7 @@ class Validation:
     kind: str
     database: str  # how the sandbox got its database
     url: str
-    ai: str
+    ai: Ai
     analysis: str = ""  # summary.md of the mongo2pg analysis, for a migration
     feature_check: str = ""  # the AI's script, for a task
     feature_log: str = ""
@@ -71,7 +74,7 @@ def body(text: str, v: Validation, run: str) -> str:
     """The AI's text, then what the pipeline did: the analysis, the validation, the feature check, the preview."""
     parts = [text.strip(), ""]
     if v.analysis:
-        parts += ["## Data analysis (mongo2pg)", "", f"Given to {v.ai}, read-only, without its sample values.", ""]
+        parts += ["## Data analysis (mongo2pg)", "", f"Given to {v.ai.name}, read-only, without its sample values.", ""]
         parts += [v.analysis.strip(), ""]
     parts += [
         "## Automated validation",
@@ -82,7 +85,7 @@ def body(text: str, v: Validation, run: str) -> str:
         f"{v.database}): GET /healthz and GET / answer.",
     ]
     if v.feature_check:
-        parts += ["", "### Feature check", "", f"{v.ai}'s script, run on the sandbox (a fork of the data):", ""]
+        parts += ["", "### Feature check", "", f"{v.ai.name}'s script, run on the sandbox (a fork of the data):", ""]
         parts += ["<details><summary>feature-check.sh</summary>", "", "```sh", v.feature_check.rstrip(), "```"]
         parts += ["", "</details>", "", "```", _tail(v.feature_log, 30), "```"]
     parts += [

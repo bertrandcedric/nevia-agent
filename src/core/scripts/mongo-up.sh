@@ -12,8 +12,8 @@ TAG=mongo
 source ~/.nevia-agent/lib.sh
 cd ~
 [ -f ~/mongo.env ] && . ~/mongo.env
-MONGO_IMAGE=${MONGO_IMAGE:?MONGO_IMAGE in ~/mongo.env} MONGO_CACHE_GB=${MONGO_CACHE_GB:-0.25}
-pod=${MONGO_POD:-mongo} container=${MONGO_CONTAINER:-mongo}
+MONGO_IMAGE=${MONGO_IMAGE:?MONGO_IMAGE in ~/mongo.env} MONGO_CACHE_GB=${MONGO_CACHE_GB:?MONGO_CACHE_GB in ~/mongo.env}
+pod=${MONGO_POD:?MONGO_POD in ~/mongo.env} container=${MONGO_CONTAINER:?MONGO_CONTAINER in ~/mongo.env}
 auth=; [ -z "${MONGO_ROOT_USERNAME:-}${MONGO_ROOT_PASSWORD:-}" ] || auth=1
 if [ -n "$auth" ] && { [ -z "${MONGO_ROOT_USERNAME:-}" ] || [ -z "${MONGO_ROOT_PASSWORD:-}" ]; }; then
   die "MONGO_ROOT_USERNAME and MONGO_ROOT_PASSWORD go together"
@@ -29,7 +29,7 @@ if ! podman container exists "$container"; then
   set -- -v "$HOME/mongo-data:/data/db"
   # The image's entrypoint makes the root user and runs the init scripts on a first start, then turns auth on.
   [ -z "$auth" ] || set -- "$@" -v "$HOME/mongo-init:/docker-entrypoint-initdb.d:ro" \
-    -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD -e "MONGO_INITDB_DATABASE=${MONGO_DB:-test}"
+    -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD -e "MONGO_INITDB_DATABASE=${MONGO_DB:?MONGO_DB with auth}"
   MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-} MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-} \
     podman create --pod "$pod" --name "$container" "$@" "$MONGO_IMAGE" \
       --bind_ip_all --wiredTigerCacheSizeGB "$MONGO_CACHE_GB" >/dev/null

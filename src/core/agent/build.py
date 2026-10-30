@@ -3,7 +3,6 @@
 import hashlib
 import json
 import shutil
-import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +50,6 @@ class Builder:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(self.build(), dest)
         dest.chmod(0o755)
-        version = subprocess.run([str(dest), "--version"], capture_output=True, text=True, check=True).stdout.strip()
+        version = run([str(dest), "--version"]).strip()
         console.log(f"{dest}: {version}")
         return version

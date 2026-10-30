@@ -17,9 +17,12 @@ from typing import Any
 
 import httpx
 
-from acc.config import AI_USER, Settings
+from acc.config import AI_USER, Postgres, Settings
+from acc.run import Kind
 from core.agent import ai
 from core.agent.host import HOME, lib, q, run
+from core.nevia import NO_UPDATE_CHECK
+from core.results import RESULT
 from core.shell import console
 
 CHECK = "work/feature-check.sh"  # a task's feature check, in the run's directory
@@ -27,10 +30,19 @@ _KIND = re.compile(r"^\s*database\.kind\s*[=:]\s*(\S*)\s*$", re.MULTILINE)
 _JAR_EXCLUDED = ("original-", "-sources.jar", "-javadoc.jar")
 
 
-def db_kind(properties: str) -> str:
-    """`database.kind` (mongo or postgres) in an application.properties, or nothing."""
+def _kind_set(properties: str) -> str:
+    """`database.kind` in an application.properties, the last one, or nothing."""
     found = _KIND.findall(properties)
     return found[-1] if found else ""
+
+
+def db_kind(properties: str) -> Kind:
+    """`database.kind` in an application.properties, which must be mongo or postgres."""
+    match kind := _kind_set(properties):
+        case "mongo" | "postgres":
+            return kind
+        case _:
+            raise RuntimeError(f"database.kind must be mongo or postgres, got {kind!r}")
 
 
 def run_dir(s: Settings, rid: str) -> Path:
@@ -61,7 +73,7 @@ def clone(s: Settings, rid: str) -> None:
     git("config", "user.name", "acc agent", cwd=repo)
     git("config", "user.email", "acc-agent@users.noreply.github.com", cwd=repo)
     props = repo / "src/main/resources/application.properties"
-    if not (repo / "pom.xml").is_file() or not db_kind(props.read_text() if props.is_file() else ""):
+    if not (repo / "pom.xml").is_file() or not _kind_set(props.read_text() if props.is_file() else ""):
         raise RuntimeError(f"{r.github} is not a Maven app with a database.kind")
     try:
         git("push", "-q", "--dry-run", "origin", f"HEAD:refs/heads/agent/{rid}", cwd=repo)
@@ -196,7 +208,7 @@ def pg_env(uri: str, ca_file: str) -> dict[str, str]:
 
 def ai_command(s: Settings, d: Path, env: dict[str, str]) -> list[str]:
     """The AI headless, as its own Unix user (AI_USER): it gets `env` (sudo keeps those names only), not this
-    user's files, its key file or its env."""
+    user's files, its key file or its env; its nevia CLI, the pinned one, offers no newer release."""
     user_home = Path(pwd.getpwnam(AI_USER).pw_dir)
     other = d / "analysis" if (d / "analysis").is_dir() else d / "work"
     keep = ",".join(sorted(env))
@@ -204,7 +216,8 @@ def ai_command(s: Settings, d: Path, env: dict[str, str]) -> list[str]:
     cmd = ai.command(s.ai, (d / "prompt.md").read_text(), home=user_home, allowed=s.agent.allowed_tools,
                      dirs=(other, Path("/tmp")))  # fmt: skip  # noqa: S108 - its scratch space
     return ["sudo", "-n", "-u", AI_USER, "-H", f"--preserve-env={keep}", "env", f"PATH={path}",
-            f"JAVA_HOME={tools_env(s)['JAVA_HOME']}", *cmd]  # fmt: skip
+            f"JAVA_HOME={tools_env(s)['JAVA_HOME']}", *(f"{k}={v}" for k, v in NO_UPDATE_CHECK.items()),
+            *cmd]  # fmt: skip
 
 
 def ai_session(s: Settings, rid: str) -> None:
@@ -222,12 +235,11 @@ def ai_session(s: Settings, rid: str) -> None:
     if "DATABASE_URL" in env:
         env |= pg_env(env["DATABASE_URL"], env["PG_CA_FILE"])
     log, render = ai.log(d, 1), HOME / s.agent.dir / "tools" / ai.render(s.ai)
-    rc = ai.session(ai_command(s, d, env), cwd=d / "repo", env=os.environ | env, render=render, log=log)
-    result = ai.result(s.ai, log.with_suffix(".jsonl").read_text().splitlines())
+    rc, result = ai.run_session(s.ai, ai_command(s, d, env), cwd=d / "repo", env=os.environ | env, render=render,
+                                log=log)  # fmt: skip
     if result is None:
         raise RuntimeError(f"{s.ai.name} ended with {rc}, without a result: {log}")
-    log.with_suffix(".json").write_text(json.dumps(result) + "\n")
-    (d / ai.RESULT).write_text(json.dumps(ai.total([result])) + "\n")
+    (d / RESULT).write_text(json.dumps(ai.total([result])) + "\n")
 
 
 def app_jar(repo: Path) -> Path:
@@ -248,13 +260,21 @@ def build(s: Settings, rid: str) -> Path:
     return app_jar(d / "repo")
 
 
+def libpq_uri(uri: str) -> str:
+    """`uri` without the parameters only JDBC takes (`Postgres.pooled_params`), which libpq refuses."""
+    u = urllib.parse.urlsplit(uri)
+    kept = [(k, v) for k, v in urllib.parse.parse_qsl(u.query) if k not in Postgres.pooled_params]
+    return urllib.parse.urlunsplit(u._replace(query=urllib.parse.urlencode(kept)))
+
+
 def pg_init(repo: Path) -> None:
-    """`local/postgres-init/*.sql` into the database of DATABASE_URL (this step's env), in the order of their
-    names, each in one transaction, as the postgres image's /docker-entrypoint-initdb.d does."""
+    """`local/postgres-init/*.sql` into the database of DATABASE_URL (this step's env, the app's: maybe through
+    the pooler), in the order of their names, each in one transaction, as the postgres image's
+    /docker-entrypoint-initdb.d does."""
     for f in sorted((repo / "local/postgres-init").glob("*.sql")):
         console.log(f"loading local/postgres-init/{f.name}")
-        run(["psql", os.environ["DATABASE_URL"], "-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction",
-             "-f", str(f)])  # fmt: skip
+        run(["psql", libpq_uri(os.environ["DATABASE_URL"]), "-X", "-q", "-v", "ON_ERROR_STOP=1",
+             "--single-transaction", "-f", str(f)])  # fmt: skip
 
 
 def feature_check(s: Settings, rid: str, url: str) -> str:
@@ -287,11 +307,14 @@ def setup(s: Settings) -> None:
 
 
 def lend_nevia(s: Settings) -> None:
-    """The nevia CLI for the AI's user too, signed in with a copy of the agent's key file (mode 600, its own):
-    the AI drives Nevia as the agent does. Again at each setup, so that a new key reaches it."""
+    """The nevia CLI for the AI's user too, signed in with the AI's own key file (a viewer's, mode 600, its own;
+    your machine put it here, `Agent.ai_principal`): the AI looks at Nevia, it can't change it, run commands on
+    a computer or read a database's password. Again at each setup, so that a new key reaches it; a copy of the
+    agent's key that an earlier setup lent goes."""
     home = Path(pwd.getpwnam(AI_USER).pw_dir)
-    key = home / s.agent.key_path
-    lent = ((HOME / ai.BIN / "nevia", home / ai.BIN / "nevia", "755"), (HOME / s.agent.key_path, key, "600"))
+    key = home / s.agent.ai_key_path
+    lent = ((HOME / ai.BIN / "nevia", home / ai.BIN / "nevia", "755"), (HOME / s.agent.ai_key_path, key, "600"))
+    run(["sudo", "-n", "rm", "-f", str(home / s.agent.key_path)])  # the agent's own, an editor's
     # Its directories made, then all of ~/.config and ~/.local its own: the CLI writes its config there.
     run(["sudo", "-n", "mkdir", "-p", *(str(dest.parent) for _, dest, _ in lent)])
     run(["sudo", "-n", "chown", "-R", f"{AI_USER}:{AI_USER}", str(home / ".config"), str(home / ".local")])
@@ -299,4 +322,5 @@ def lend_nevia(s: Settings) -> None:
         run(["sudo", "-n", "install", "-o", AI_USER, "-g", AI_USER, "-m", mode, str(src), str(dest)])
     nv = f"~/{ai.BIN}/nevia"
     signs_in = f"{nv} auth use-key-file {q(key)} >/dev/null && {nv} workspace use {q(s.nevia.workspace)} >/dev/null"
-    run(["sudo", "-n", "-u", AI_USER, "-H", "bash", "-lc", signs_in])
+    no_check = [f"{k}={v}" for k, v in NO_UPDATE_CHECK.items()]
+    run(["sudo", "-n", "-u", AI_USER, "-H", "env", *no_check, "bash", "-lc", signs_in])

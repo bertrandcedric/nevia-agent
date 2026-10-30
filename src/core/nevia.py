@@ -9,10 +9,13 @@ import base64
 import builtins
 import hashlib
 import json
+import os
+import re
 import shlex
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,19 +28,28 @@ __all__ = ["CliError", "CommandFailed", "Nevia", "NeviaError"]
 
 Runner = Callable[[list[str], bytes | None], subprocess.CompletedProcess[bytes]]
 NOT_FOUND, RETRYABLE = 3, 6  # the CLI's exit codes (`nevia --help`)
+# Signing in with a key file takes a token per command, at most 30 a minute from one address (the agent's, its
+# AI's, maybe other computers'): the CLI then says when to retry, before anything ran.
+THROTTLED = re.compile(rb"Too many token requests.*?Retry after (\d+) seconds", re.S)
+THROTTLE_TRIES, THROTTLE_MAX = 4, 70  # seconds at most per wait
 CHUNK = 512 * 1024  # bytes per exec for a file, base64 under the CLI's 1 MiB of stdin or output
 RETRIES = 3
+# An agent computer's CLI is pinned (`[runtime] nevia`): it doesn't offer a newer release before each command. In
+# the process env only: Nevia reserves NEVIA_* in a computer's stored env.
+NO_UPDATE_CHECK = {"NEVIA_NO_UPDATE_CHECK": "1"}
 
 
 def run_cli(argv: list[str], stdin: bytes | None) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(argv, input=stdin, capture_output=True, check=False)
+    """`argv`, its output captured; on an agent computer (`bin/agent` sets AGENT_COMPUTER) without the CLI's
+    update check, which your machine's CLI keeps."""
+    env = os.environ | NO_UPDATE_CHECK if os.environ.get("AGENT_COMPUTER") else None
+    return subprocess.run(argv, input=stdin, capture_output=True, check=False, env=env)
 
 
 class CliError(NeviaError):
     """`nevia` failed: its exit code (3 not found, 5 conflict, 6 retryable...) and its message."""
 
     def __init__(self, args: list[str], code: int, message: str) -> None:
-        self.code = code
         super().__init__(f"nevia {' '.join(args[:2])} exited {code}: {message}")
 
 
@@ -45,7 +57,7 @@ class CommandFailed(CliError):
     """A command on a computer exited nonzero."""
 
     def __init__(self, args: list[str], code: int, stdout: str, stderr: str) -> None:
-        self.exit_code, self.stdout, self.stderr = code, stdout, stderr
+        self.exit_code = code
         super().__init__(args, code, stderr.strip()[-2000:] or stdout.strip()[-2000:])
 
 
@@ -86,11 +98,22 @@ class Nevia:
     def cli(self, *args: str, stdin: bytes | None = None, retry: bool = False) -> subprocess.CompletedProcess[bytes]:
         """`nevia ARGS` in the workspace; `retry` repeats it while the CLI says the service was busy."""
         argv = [self.command, "--workspace", self.workspace, *args]
-        for attempt in range(1, RETRIES + 1):
+        throttled = 0
+        attempt = 1
+        while True:
             p = self.run(argv, stdin)
+            if (
+                p.returncode == RETRYABLE
+                and (m := THROTTLED.search(p.stdout + p.stderr))
+                and throttled < THROTTLE_TRIES
+            ):
+                throttled += 1  # refused before it ran: safe to send again, whatever the command
+                time.sleep(min(int(m[1]) + 1, THROTTLE_MAX))
+                continue
             if not (retry and p.returncode == RETRYABLE and attempt < RETRIES):
                 return p
             time.sleep(2 * attempt)
+            attempt += 1
         return p
 
     def ensure_workspace(self) -> bool:
@@ -120,6 +143,10 @@ class Nevia:
         if p.returncode:
             raise CliError(list(args), p.returncode, _message(p))
         return json.loads(p.stdout or b"null")
+
+    def operations(self, *, running: bool = True) -> list[dict[str, Any]]:
+        """The workspace's operations, newest first (`nevia ops`): only those still running, with `running`."""
+        return self.json("ops", *(["-f", "state=running"] if running else []))["operations"]
 
 
 @dataclass
@@ -173,6 +200,9 @@ class Computers(_Group):
 
     def wake(self, name: str) -> None:
         self.nv.ok("awake", name, "--wait")
+
+    def sleep(self, name: str) -> None:
+        self.nv.ok("suspend", name, "--wait")
 
     def ports(self, name: str) -> builtins.list[dict[str, Any]]:
         return self.get(name).get("ports") or []
@@ -255,20 +285,49 @@ class Databases(_Group):
     def delete(self, name: str) -> None:
         self.nv.ok("pg", "rm", name, "-y", "--wait")
 
-    def branch(self, source: str, name: str) -> None:
-        self.nv.ok("pg", "branch", source, "-b", name, "--wait")
+    def branch(self, source: str, name: str, *, protected: bool = False) -> None:
+        self.nv.ok("pg", "branch", source, "-b", name, *(["--protected"] if protected else []), "--wait")
 
-    def connection(self, name: str) -> dict[str, str]:
-        """Its URI, password included (it goes to a secret or a file, never a log), and its CA certificate."""
+    def protect(self, name: str, protected: bool = True) -> None:
+        """Refuse its deletion while `protected`; False clears it, for a delete."""
+        self.nv.ok("pg", "set", "--protected", "true" if protected else "false", name)
+
+    def reset_password(self, name: str) -> None:
+        """A new password: the old one stops working, in every copy of its URI (a sleeping database applies it when
+        it wakes). The new one is in its `connection` (`store_uri`), never in this output, which is dropped."""
+        self.nv.ok("pg", "reset-password", "-y", name)
+
+    def connection(self, name: str, *, pooled: bool = False) -> dict[str, str]:
+        """Its URI, password included (it goes to a secret or a file, never a log), and its CA certificate; `pooled`:
+        the URI through its pooler (port 6432 of the same host, transaction pooling)."""
         with tempfile.TemporaryDirectory() as d:
             ca = Path(d) / "ca.pem"
-            uri = self.nv.ok("pg", "connect", name, "--uri", "--ca", str(ca)).strip()
+            uri = self.nv.ok("pg", "connect", name, "--pooled" if pooled else "--uri", "--ca", str(ca)).strip()
             return {"uri": uri, "server_ca": ca.read_text() if ca.is_file() else ""}
+
+    def store_uri(self, name: str, secret: str, *, pooled: bool = False, params: dict[str, str] | None = None) -> str:
+        """Its URI (`pooled`: the pooler's), password included, with `params` added to its query, into the workspace
+        secret `secret`, never a log; its CA certificate (not a secret)."""
+        conn = self.connection(name, pooled=pooled)
+        if not (uri := conn["uri"]):
+            raise RuntimeError(f"{name} has no connection URI yet")
+        if params:
+            u = urllib.parse.urlsplit(uri)
+            query = urllib.parse.urlencode([*urllib.parse.parse_qsl(u.query), *params.items()])
+            uri = urllib.parse.urlunsplit(u._replace(query=query))
+        self.nv.secrets.set(secret, uri)
+        return conn["server_ca"] or ""
 
 
 class Secrets(_Group):
     def list(self) -> builtins.list[dict[str, Any]]:
         return self.nv.json("secrets", "ls")["secrets"]
+
+    def names(self) -> builtins.set[str]:
+        return {s["name"] for s in self.list()}
+
+    def exists(self, name: str) -> bool:
+        return name in self.names()
 
     def set(self, name: str, value: str) -> None:
         """The value through stdin, never on a command line."""

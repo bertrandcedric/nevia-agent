@@ -11,14 +11,12 @@ from typing import Any
 from core.agent.host import lib, q, run
 from core.computer import bundled, secret
 from core.config import Ai
+from core.results import usd
 from core.shell import console
 
 BIN = ".local/bin"  # its binary's directory, under its user's home
 TOOLS = ("common.jq", "render-claude.jq", "render-copilot.jq")  # in core/scripts, for the agents' tools directory
 ENV_PREFIXES = ("ANTHROPIC_", "COPILOT_")  # its settings in a job's env, which a step passes on to it
-# A run's files, both agents' alike: each AI session's in logs/ (`log`), and at the run's root its result over
-# all of them (`total`) and its report.
-RESULT, REPORT = "result.json", "report.md"
 USAGE = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD")
 
 
@@ -35,8 +33,9 @@ def log(run_dir: Path, n: int) -> Path:
     return run_dir / "logs" / f"ai-{n}.log"
 
 
-def tools() -> dict[str, bytes]:
-    return {name: bundled("core", f"scripts/{name}") for name in TOOLS}
+def tools() -> dict[str, tuple[bytes, str]]:
+    """TOOLS, read-only, as `Computer.put_tools` takes them."""
+    return {name: (bundled("core", f"scripts/{name}"), "444") for name in TOOLS}
 
 
 def install(ai: Ai, computer: str, user: str = "") -> str:
@@ -129,6 +128,17 @@ def session(cmd: list[str], *, cwd: Path, env: dict[str, str], render: Path, log
     return rc
 
 
+def run_session(  # noqa: PLR0913 - `session`'s, and the engine
+    ai: Ai, cmd: list[str], *, cwd: Path, env: dict[str, str], render: Path, log: Path
+) -> tuple[int, dict[str, Any] | None]:
+    """`session`, then its `result`, kept next to `log` (`.json`) when it has one: its exit code and result."""
+    rc = session(cmd, cwd=cwd, env=env, render=render, log=log)
+    res = result(ai, log.with_suffix(".jsonl").read_text().splitlines())
+    if res is not None:
+        log.with_suffix(".json").write_text(json.dumps(res) + "\n")
+    return rc, res
+
+
 def result(ai: Ai, events: list[str]) -> dict[str, Any] | None:
     """The session's end, as Claude Code's result event has it (`is_error`, `subtype`, `num_turns`, `result`: its
     last reply, and Claude's own counts), or None without one."""
@@ -170,10 +180,6 @@ def total(results: list[dict[str, Any]]) -> dict[str, Any]:
     if models:
         out["modelUsage"] = models
     return out | {"sessions": len(results)}
-
-
-def usd(x: Any) -> str:
-    return f"${float(x or 0):.4f}"
 
 
 def report(res: dict[str, Any]) -> list[str]:

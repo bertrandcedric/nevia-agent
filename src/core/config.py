@@ -3,15 +3,29 @@
 which each agent's own settings read.
 What is a convention, not a choice (secret names, users, paths), is in the code, as ClassVars."""
 
+import os
+import re
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_DIR = ROOT / "build"  # your machine's results, and on an agent computer mongo2pg's binary and runs' state
 CONFIG_FILE = ROOT / "agent.toml"
+WORKSPACE_ENV = "AGENT_WORKSPACE"  # the Nevia workspace instead of `[<agent>.nevia] workspace`, for both agents
+RUN_ID = re.compile(r"\d{12}")  # a run's id, both agents': `yymmddHHMMSS` (UTC) of its start
+
+
+def new_run_id() -> str:
+    return datetime.now(UTC).strftime("%y%m%d%H%M%S")
+
+
+def runs_dir(agent: str) -> Path:
+    """Where an agent's runs are, one directory per id: its results on your machine, acc's state on its computer."""
+    return BUILD_DIR / f"{agent}-runs"
 
 
 class Section(BaseModel):
@@ -29,6 +43,8 @@ class Runtime(Section):
 
 
 SecretName = Annotated[str, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
+# Names that end up in SQL and shell commands: plain lowercase identifiers only.
+Ident = Annotated[str, StringConstraints(pattern=r"^[a-z_][a-z0-9_]*$")]
 
 
 class MongoDB(Section):
@@ -55,10 +71,14 @@ class Copilot(Section):
     max_output_tokens: int
 
 
+Engine = Literal["claude", "copilot"]
+ENGINES: dict[Engine, str] = {"claude": "Claude Code", "copilot": "GitHub Copilot CLI"}  # their names, as shown
+
+
 class Ai(Section):
     """The AI agent both agents run (`core.agent.ai`), and the env var of the gateway's key in `.env`."""
 
-    engine: Literal["claude", "copilot"] = "claude"
+    engine: Engine = "claude"
     gateway_secret: SecretName
     claude: Claude
     copilot: Copilot
@@ -69,12 +89,13 @@ class Ai(Section):
 
     @property
     def name(self) -> str:
-        return "Claude Code" if self.engine == "claude" else "GitHub Copilot CLI"
+        return ENGINES[self.engine]
 
 
 class Mongo2pg(Section):
     repo: str
     release: Annotated[str, StringConstraints(min_length=1)]
+    sample_percent: Annotated[float, Field(gt=0, le=100)]  # of each collection, for m2p's infer
 
     @property
     def github(self) -> str:
@@ -98,12 +119,29 @@ class AgentComputer(Section):
 
 
 class AgentSettings(Section):
-    """An agent's settings. Everything it makes on Nevia carries its name, so the two agents never meet in a
+    """An agent's settings: the shared sections, its workspace and its computer (each agent's own `agent`, a
+    subclass of AgentComputer). Everything it makes on Nevia carries its name, so the two agents never meet in a
     workspace: resources `<agent>-...` (checked when the settings are read), secrets `<AGENT>_...`
     (`secret`)."""
 
     AGENT: ClassVar[str]  # m2p or acc
     NAMES: ClassVar[tuple[str, ...]]  # the dotted paths of the Nevia names in these settings
+
+    nevia: Nevia
+    runtime: Runtime
+    ai: Ai
+    mongodb: MongoDB
+    mongo2pg: Mongo2pg
+    agent: AgentComputer
+
+    @classmethod
+    def load(cls, path: Path = CONFIG_FILE) -> Self:
+        """The agent's settings in agent.toml; its workspace WORKSPACE_ENV's when that is set (`agent --workspace`,
+        or .env), on your machine and, as `Bootstrap.remote` passes it on, on the agent computer."""
+        data = read(cls.AGENT, path)
+        if workspace := os.environ.get(WORKSPACE_ENV):
+            data["nevia"] = {**(data.get("nevia") or {}), "workspace": workspace}
+        return cls.model_validate(data)
 
     @property
     def prefix(self) -> str:

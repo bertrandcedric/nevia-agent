@@ -5,14 +5,14 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from core.computer import Computer as _Computer
-from core.computer import JobFailed, redact, secret
+from core.computer import secret
 from m2p.config import Settings
 
-__all__ = ["JOBS_DIR", "MONGO_CONTAINER", "Computer", "JobFailed", "redact"]
+__all__ = ["JOBS_DIR", "MONGO_CONTAINER", "MONGO_POD", "PACKAGE", "Computer"]
 
 PACKAGE = "m2p"  # its scripts are in m2p/scripts/
 JOBS_DIR = "$HOME/.m2p-jobs"  # absolute: job commands often cd elsewhere first
-MONGO_CONTAINER = "m2p-mongo"  # from mongo-up.sh
+MONGO_POD, MONGO_CONTAINER = PACKAGE, f"{PACKAGE}-mongo"  # mongo-up.sh's, through ~/mongo.env
 
 
 @dataclass
@@ -25,8 +25,8 @@ class Computer(_Computer):
 
     # ------------------------------------------------------------------ mongo
 
-    def mongo(self, js: str, db: str | None = None) -> str:
-        db = db or self.settings.mongo.database
+    def mongo(self, js: str) -> str:
+        db = self.settings.mongo.database
         return self.sh(f"podman exec {MONGO_CONTAINER} mongosh --quiet {db} --eval {shlex.quote(js)}")
 
     # ------------------------------------------------------------------ postgres

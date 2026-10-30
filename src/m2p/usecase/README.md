@@ -6,24 +6,58 @@ document per customer with its addresses, contacts, orders and their items, tags
 - `seed.py` generates it on the source computer from `[m2p.seed]` in `agent.toml`
   (`python src/m2p/usecase/seed.py --help`).
 - `DESCRIPTION` (in `__init__.py`) describes it in the agent's guide.
-- `__init__.py` has the `[seed]` settings and what `setup` needs to seed the source.
+- `__init__.py` has the `[m2p.seed]` settings and what `setup` needs to seed the source.
 
 ## The two shapes
 
-A customer document (`C-S00036` with the default `[seed]`, its other contacts, address, orders and
+A customer document (`C-S00036` with seed.py's defaults, its other contacts, address, orders and
 items cut), and the PostgreSQL tables mongo2pg makes of it (schema `hello`, database `hello`):
 
 ```js
-{ _id: "C-S00036", type: "company", name: "Acme Immobilier", email: "contact@acme-immobilier.example",
-  phone: "+33 6 69 80 27 14", status: "prospect", tags: ["loyalty", "new"],
-  addresses: [{ kind: "billing", street: "26 boulevard Haussmann", city: "Marseille", postalCode: "13001",
-                country: "FR" }, ...],
-  contacts: [{ firstName: "Hugo", lastName: "Martin", role: "Achats", email: "h.martin@acme-immobilier.example",
-               phone: "+33 1 40 00 39 55" }, ...],
-  orders: [{ orderId: "O-36-1", date: ISODate("2024-05-18T09:19:23.332Z"), status: "delivered",
-             items: [{ sku: "CHA-100", label: "Chaise de bureau", quantity: 27, unitPrice: 89.9 }, ...] }, ...],
+{
+  _id: "C-S00036",
+  type: "company",
+  name: "Acme Immobilier",
+  email: "contact@acme-immobilier.example",
+  phone: "+33 6 69 80 27 14",
+  status: "prospect",
+  tags: ["loyalty", "new"],
+  addresses: [
+    {
+      kind: "billing",
+      street: "26 boulevard Haussmann",
+      city: "Marseille",
+      postalCode: "13001",
+      country: "FR"
+    },
+    ...
+  ],
+  contacts: [
+    {
+      firstName: "Hugo",
+      lastName: "Martin",
+      role: "Achats",
+      email: "h.martin@acme-immobilier.example",
+      phone: "+33 1 40 00 39 55"
+    },
+    ...
+  ],
+  orders: [
+    {
+      orderId: "O-36-1",
+      date: ISODate("2024-05-18T09:19:23.332Z"),
+      status: "delivered",
+      items: [
+        { sku: "CHA-100", label: "Chaise de bureau", quantity: 27, unitPrice: 89.9 },
+        ...
+      ]
+    },
+    ...
+  ],
   preferences: { language: "de", newsletter: true, channels: ["phone", "sms"] },
-  createdAt: ISODate("2024-10-31T10:28:12.252Z"), updatedAt: ISODate("2024-12-26T10:28:12.252Z") }
+  createdAt: ISODate("2024-10-31T10:28:12.252Z"),
+  updatedAt: ISODate("2024-12-26T10:28:12.252Z")
+}
 ```
 
 | MongoDB | PostgreSQL |
@@ -39,7 +73,7 @@ Field names lose their capitals (`unitPrice` becomes `unitprice`). An optional f
 order's date) is left out of the document when it has no value, and is `NULL` in PostgreSQL; an empty
 list (`contacts: []`) has no child row.
 
-With the default `[seed]` and `strange_kinds = []`, both sides hold 5000 customers, 5000 addresses,
+With seed.py's defaults (5000 customers, seed 42) and no strange kinds, both sides hold 5000 customers, 5000 addresses,
 3051 contacts, 20015 orders, 69999 items and 2983 preferences. Anomalies (`strange_kinds`) change these.
 
 ## Connecting

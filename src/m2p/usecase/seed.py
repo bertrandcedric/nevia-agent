@@ -311,8 +311,8 @@ def main(argv: list[str] | None = None) -> None:
 
     gen = Customers(args.seed, args.strange, kinds)
     with MongoClient(args.mongo_url) as client:
+        client.drop_database(args.db)  # from scratch: whatever an earlier seed or run left there goes
         customers = client[args.db]["customers"]
-        customers.drop()
         for n in range(1, args.customers + 1, 1000):
             customers.insert_many([gen.next(n + i) for i in range(min(1000, args.customers - n + 1))], ordered=True)
         print(f"[seed] {customers.count_documents({})} customers in {args.db}.customers, "

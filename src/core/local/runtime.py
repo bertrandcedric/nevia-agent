@@ -16,9 +16,9 @@ from pathlib import Path
 
 import nevia_kit
 
+from core.computer import HOME  # under the computer user's home
 from core.config import CONFIG_FILE, ROOT, Runtime
 
-HOME = ".nevia-agent"  # under the computer user's home
 BUNDLE = f"{HOME}/bundle.tgz"
 SRC = Path(__file__).resolve().parents[2]  # src/, where this project's packages are
 PACKAGES = ("core", "m2p", "acc")

@@ -36,7 +36,12 @@ def _opts(args: list[str], *flags: str) -> tuple[dict[str, list[str]], list[str]
     return opts, pos
 
 
-FLAGS = ("--wait", "-y", "--yes", "-n", "--uri", "--private-key", "--json")
+FLAGS = ("--wait", "-y", "--yes", "-n", "--uri", "--pooled", "--private-key", "--json")
+CONFLICT = 5  # the CLI's exit code for a request the resource's state refuses
+
+
+class Refused(Exception):
+    """What the real API refuses and FakeApi doesn't: the CLI's conflict."""
 
 
 def _ports(values: list[str]) -> Any:  # nevia-kit's PortMapping list
@@ -61,6 +66,7 @@ class FakeCli:
     def __init__(self, kit: Kit) -> None:
         self.kit = kit
         self.calls: list[list[str]] = []
+        self.resets: dict[str, int] = {}  # database: its password resets, which FakeApi doesn't keep
 
     def __call__(self, argv: list[str], stdin: bytes | None) -> subprocess.CompletedProcess[bytes]:
         args = argv[3:] if argv[1] == "--workspace" else argv[1:]  # nevia [--workspace WS] ...
@@ -73,7 +79,18 @@ class FakeCli:
             return self._done(argv, 3, "", json.dumps({"error": {"message": str(err), "exit_code": 3}}))
         except CommandFailed as err:
             return self._done(argv, err.exit_code, err.stdout, err.stderr)
+        except Refused as err:
+            return self._done(argv, CONFLICT, "", json.dumps({"error": {"message": str(err), "exit_code": CONFLICT}}))
         return self._done(argv, 0, out if isinstance(out, str) else json.dumps(out), "")
+
+    def _refuse_in_use(self, computer: str) -> None:
+        """Nevia refuses to delete a computer while a live computer restored from one of its checkpoints exists;
+        FakeApi doesn't."""
+        mine = {c["id"] for c in self.kit.checkpoints.list(self.kit.computers.get(computer)["id"])}
+        users = [c for c in self.kit.computers.list() if c.get("from_checkpoint") in mine]
+        if users:
+            n = len(users)
+            raise Refused(f"Checkpoint of {computer} is in use by {n} live computer created or restored from it")
 
     @staticmethod
     def _done(argv: list[str], code: int, out: str, err: str) -> subprocess.CompletedProcess[bytes]:
@@ -92,7 +109,8 @@ class FakeCli:
             sub = ""
         if cmd == "access" and sub == "keys":
             sub, rest = f"keys {rest[0]}", rest[1:]
-        o, pos = _opts(rest, *FLAGS)
+        # pg branch's --protected is a flag; pg set's takes a value.
+        o, pos = _opts(rest, *FLAGS, *(["--protected"] if (cmd, sub) == ("pg", "branch") else []))
         if cmd == "workspace":
             sub, pos = rest[0], rest[1:]
         match cmd, sub:
@@ -111,11 +129,17 @@ class FakeCli:
                 ports = _ports(o["-p"]) if "-p" in o else None
                 kit.computers.update(pos[0], env=env or None, ports=ports)
             case "rm", "":
+                self._refuse_in_use(pos[0])
                 kit.computers.delete(pos[0])
             case "branch", "":
                 kit.computers.branch(o["-s"][0], pos[0])
             case "awake", "":
                 kit.computers.wake(pos[0])
+            case "suspend", "":
+                kit.computers.sleep(pos[0])
+            case "ops", "":
+                filters = dict(f.split("=", 1) for f in o.get("-f", []))
+                return {"operations": kit.operations.list(**filters), "has_more": False, "next_cursor": None}
             case "restore", "":
                 kit.checkpoints.restore(o["-c"][0], pos[0], o["--name"][0])
             case "exec", "":
@@ -137,14 +161,26 @@ class FakeCli:
             case "pg", "new":
                 kit.databases.create(pos[0])
             case "pg", "rm":
+                if kit.databases.get(pos[0]).get("protected"):
+                    raise Refused(f"database {pos[0]} is protected: nevia pg set --protected false first")
                 kit.databases.delete(pos[0])
             case "pg", "branch":
-                kit.databases.branch(pos[0], o["-b"][0])
+                kit.databases.branch(pos[0], o["-b"][0], protected=True if "--protected" in o else None)
+            case "pg", "set":
+                kit.databases.update(pos[0], protected={"true": True, "false": False}[o["--protected"][0]])
+            case "pg", "reset-password":
+                kit.databases.reset_credentials(pos[0])
+                self.resets[pos[0]] = self.resets.get(pos[0], 0) + 1
             case "pg", "connect":
                 conn = kit.databases.connection(pos[0])
                 if "--ca" in o:
                     Path(o["--ca"][0]).write_text(conn["server_ca"] or "")
-                return (conn["uri"] or "") + "\n"
+                uri = conn["uri"] or ""
+                if "--pooled" in o:  # the pooler's, on 6432 of the same host (FakeApi's is the spec's example)
+                    uri = uri.replace(":5432/", ":6432/")
+                if n := self.resets.get(pos[0]):  # the password as of its latest reset
+                    uri = uri.replace(":secret@", f":secret{n}@")
+                return uri + "\n"
             case "secrets", "ls":
                 return {"secrets": kit.secrets.list()}
             case "secrets", "unset":
@@ -175,3 +211,14 @@ def on_fake(api: FakeApi) -> Nevia:
     """`core.nevia.Nevia` on the fake CLI over `api`, its tunnels on nevia-kit's client of it."""
     kit = api.client()
     return Nevia(kit.workspace or "default", run=FakeCli(kit), _kit=kit)
+
+
+def job_ends(fake: FakeApi, output: str = "", code: str = "0") -> None:
+    """Every job ends at once with `code`, `output` its log."""
+    fake.on_exec(".exit 2>/dev/null; echo", f"{code}\n{output.splitlines()[-1] if output else ''}\n")
+    fake.on_exec("tail -n 300", output)
+
+
+def exec_env(fake: FakeApi, needle: str) -> dict[str, str]:
+    """The env of the first exec whose command line has `needle`."""
+    return next(body.get("env") or {} for _, argv, body in fake.execs if needle in " ".join(argv))

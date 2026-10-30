@@ -27,11 +27,12 @@ def event(id_: str, time: str, text: str) -> Activity:
     return Activity(id_, time, text, text.startswith("failed:"))
 
 
-def events(lines: list[str], prefix: str = "") -> list[Activity]:
+def events(lines: list[str], prefix: str = "", start: int = 0) -> list[Activity]:
     """The events of a log's lines; a line under an event (indented) joins it, and one before any is left out.
-    `prefix` makes the ids (`prefix:N`, N the event's line) apart from another log's."""
+    `prefix` makes the ids (`prefix:N`, N the event's line) apart from another log's; `start` is the log's lines
+    before these (a tail's), so that N is the line in the whole log."""
     out: list[Activity] = []
-    for n, line in enumerate(lines, 1):
+    for n, line in enumerate(lines, start + 1):
         if m := EVENT.match(line):
             out.append(event(f"{prefix}:{n}", m[1], m[2]))
         elif out and line.startswith("    "):

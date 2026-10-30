@@ -7,13 +7,81 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `status`, both agents': Nevia's operations still running in the workspace (`nevia ops -f state=running`,
+  `Nevia.operations`), a line each with its kind, its resource and since when; nothing when there is none.
+- `[acc.postgres] pooler` (false by default): the app's `DATABASE_URL`, the stack's and the sandbox's, through the
+  database's connection pooler (`nevia pg connect --pooled`, port 6432, transaction pooling) with
+  `prepareThreshold=0` for JDBC; the seed data's psql drops that parameter, the AI's own Postgres stays direct.
+- `agent --workspace NAME` (or `AGENT_WORKSPACE`): the Nevia workspace instead of agent.toml's, for every
+  command, passed on to the agent computer's own commands and jobs.
 - A GitHub Actions workflow, `.github/workflows/ci.yml`: ruff, `bash -n` and the TOML files on every push to
   main and every pull request, without Nevia or nevia-kit; ty and pytest stay local.
+- m2p's run ends by resetting the passwords of the target and of every try branch still there (`nevia pg
+  reset-password`), however it ended (`stop` and `agent.hours` too): the URIs the AI saw stop working; the
+  target's new one goes into `M2P_PG_URL`, and the `tries/m2p-tryN.uri` files are deleted.
+- After an m2p run that passed (DONE.md), the target is protected and copied into `<postgres.name>-loaded`,
+  protected too, in place of an older copy: a restore point before the cut-over. `clean` keeps both; `destroy`
+  lists them, with the protection it clears first (`Doomed.unprotected`, `Databases.protect`).
+- docs/m2p.md: Nevia's Postgres has a fixed size and 20 GiB of storage, the ceiling for `[m2p.seed] customers`.
 - m2p collects the AI's cost: each session's result in `logs/ai-N.json` and its cost on its end line, the run's
   total in `result.json` and `report.md` (as acc's), and `run` prints it after collecting.
 
 ### Changed
 
+- The `nevia` CLI's sign-in limit (30 token requests a minute from one address, a key file taking one per
+  command): a refused call waits the time the CLI gives and is sent again (`core.nevia.THROTTLED`), and m2p's
+  `status` lists its try branches at most every 30 s.
+- acc's sandbox waits for its DNS in one command on it (`Stack.wait_dns`), not one exec every 2 s: up to 30
+  sign-ins a minute alone, which failed run 261030173011's next `nevia set`.
+- m2p: mongo2pg's `infer` runs once, by the pipeline, at the start of a run (`steps.model`, into a read-only
+  `tries/model/`, with `[mongo2pg] sample_percent` as the only change to `init`'s config), before the first
+  session; the guide tells the AI never to run `infer` nor change the sampling, and each try starts from the
+  model or the try before's (`source/`, `schema/`, `to-pg` after a mapping change). Runs 261030170535 and
+  261030172225 inferred again for each try, the last with `percent = 100`.
+- acc's AI signs its `nevia` CLI in with a viewer's key of its own, `<agent.computer>-ai` (`ACC_NEVIA_AI_KEY`),
+  instead of a copy of the agent's editor key: it can list and inspect, not change anything, `exec` or read a
+  database's connection. Your machine makes it at `setup` if it is missing (only an admin may) and removes it
+  at `destroy`; `setup` deletes the copy of the agent's key an earlier setup lent. The prompts no longer offer
+  `nevia exec`.
+- The agent computers' nevia CLI (pinned, `[runtime] nevia`) runs with `NEVIA_NO_UPDATE_CHECK=1`: in
+  `bin/agent` and setup-runtime.sh, in `core.nevia`'s commands there, and for both agents' AI; your machine's
+  CLI still offers a newer release.
+- `Computers.sleep` runs `nevia suspend` (`sleep` is only its alias).
+- m2p's AI sessions run their commands in bash (`SHELL=/bin/bash`), as acc's: the agent computer's login
+  shell may be zsh, where `echo == x` failed (run 261030153724).
+- `agent m2p setup` replaces the source MongoDB (`mongo.computer`) with a fresh branch of a seed computer,
+  `<mongo.computer>-seed`, and refuses while the agent runs: every setup gives the same data, as a fresh seed's.
+  The seed computer is seeded again (made from scratch) only when its `~/seed.json` (`[m2p.seed]`, the
+  database, `[mongodb] image`, seed.py's sha256) differs, and sleeps between setups; `destroy` deletes it,
+  `clean` doesn't. It seeded only an empty source before.
+- m2p's try branches are `<tries>N` exactly (`Settings.is_try`), no longer any name with that prefix; a
+  `postgres.name` that would be one is refused.
+- Both agents' `run` puts the agent computer to sleep once the run is over (`Local.asleep_after`, `nevia suspend`),
+  however it ended, even when collecting fails; not after a Ctrl-C or while its job still runs; a sleep that
+  fails says so. Every command wakes it again.
+- m2p: mongo2pg's infer samples `[mongo2pg] sample_percent` of each collection (1 by default), not `init`'s
+  1000 documents: the guide's commands set `percent` in each try's config.
+- A cleanup and refactoring, with no change to the commands:
+  - what both agents repeated is in core: the settings' shared fields and `load`, `Bootstrap.of`, the local and
+    agent-side bases (`core/local/frame.py`, `core/agent/frame.py`), one deletion (`core.doomed.delete`) and one
+    list-ask-delete protocol for `clean` and `destroy` (m2p's `clean` now lists before asking, as acc's), the
+    tools and MongoDB setup, URIs into secrets, run ids and runs dirs, the AI session's result and its cost
+    (`core/results.py`);
+  - acc's run names are made and matched in one place (`RunNames`), m2p's branch prefix comes from the settings;
+  - the agent computer reads its own files in Python: m2p's `status` without its shell script, and with
+    `core.activity.events` (continuation lines kept), its loop job in your time zone as acc's are;
+  - jobs run in a session of their own (`setsid`, `name.pid`) and `stop` stops it (`Computer.stop_job`), not
+    `pkill` patterns; following rides out a short Nevia blip; m2p's `remote running` is gone;
+  - `acc/agent.py` split into `acc/run.py` (both sides), `acc/cleanup.py` and `acc/stack.py`, its steps
+    dispatched by a dict; m2p's follow printer and results in `m2p/follow.py` and `m2p/results.py`; your
+    machine's modules import nothing of the agent computer's, and `tests/test_layers.py` checks every module's
+    side;
+  - tests share `tests/conftest.py` and `fake_nevia.job_ends`; core's tests moved up from `tests/m2p/`;
+  - removed what nothing used (exception attributes, `Repo.name`, re-exports, never-passed parameters, the m2p
+    agent computer's Python drivers), and fixed stale comments and docs.
+- `docs/presentation.pptx`: text-only slides spread their bullets over the slide's height, in the largest size
+  up to 20 pt that fits (`make_pptx.py`'s `spread_into`), as the Marp deck's `space-evenly`.
+- agent.toml: GitHub Copilot CLI 1.0.105 (and its npm integrity), Maven 3.9.16 for acc's app.
 - acc's `FEATURE.md`: the feature check's requests are built from the app's validation and its tests' examples,
   and each read against the code that handles it, since the AI can't run the check; a check that relies on an
   earlier request checks its status first (run 261030122635's check created a customer without its required
@@ -44,6 +112,14 @@ All notable changes to this project are documented here. The format follows
 ### Removed
 
 - m2p's Copilot cost (`usage.py`, `price_*`, the token table at the end of `run`).
+
+### Fixed
+
+- acc's stack step failed after a first run (run 261030155307: `nevia rm acc-app exited 5: Checkpoint ... is in
+  use by 1 live computer`): Nevia keeps a computer while one restored from its checkpoint lives, and each run
+  leaves its sandbox. `Stack.deploy` now deletes the earlier runs' sandboxes, then their MongoDB forks
+  (`RunNames.computers`, the current run's excluded), each logged, before `acc-app` and `acc-mongo`; the
+  previous preview URL goes away when a new run starts its stack. The fake `nevia rm` refuses as Nevia does.
 
 - One project for both agents, nevia-agent: m2p (from nevia-mongo-to-pg) and acc (this repository's uc2,
   rewritten), under one CLI, `agent m2p ...` and `agent acc ...`, with one `agent.toml` (`[nevia]` and

@@ -10,11 +10,11 @@ import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.computer import Computer, redact
+from core.computer import HOME, Computer, redact
 from core.shell import console
 
 COLLECT_MAX_MB = 20
-STAGE = ".nevia-agent/collect"  # on the computer, under the home: the extra files and skipped.txt
+STAGE = f"{HOME}/collect"  # on the computer, under the home: the extra files and skipped.txt
 ARCHIVE = f"{STAGE}.tar.gz"
 
 

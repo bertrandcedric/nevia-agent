@@ -1,12 +1,15 @@
 """docs/presentation.md as a PowerPoint deck in Aiven's brand template, docs/presentation.pptx.
 
-The text (titles, bullets, the table, the speaker's notes, the animations' captions) comes from the Markdown;
-the diagrams are drawn here as native shapes, in the brand palette, and the two "step by step" animations are
-a slide per step, as in the Markdown, so that going back a step is going back a slide. Run with python-pptx:
+All the text comes from the Markdown: titles, bullets, the table, the speaker's notes, and what only the
+PowerPoint shows (eyebrows, footer, the diagrams' labels, the animations' captions) from its `pptx` comments,
+keyed by slide and by id. This script only lays it out: the diagrams are drawn here as native shapes, in the
+brand palette, and the two "step by step" animations are a slide per step, as in the Markdown, so that going
+back a step is going back a slide. Run with python-pptx:
 
     uv run --with python-pptx docs/make_pptx.py [TEMPLATE.pptx]
 """
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -16,7 +19,7 @@ from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
-from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
@@ -31,13 +34,27 @@ TEXT, MONO = "Inter", "Geist Mono Medium"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 
 COVER, CONTENT, CLOSING = "TITLE_2_2_1_1", "TITLE_AND_BODY_1_4_1_1_1", "BLANK_1_1_1"
-EYEBROWS = [
-    "", "THE PROBLEM", "NEVIA", "NEVIA", "THE MIGRATION", "THE DATA · M2P", "THE CODE · ACC", "VALIDATE, CUT OVER",
-    "HOW IT RUNS", "WHAT NEXT",
-]  # fmt: skip
 
 
 # ---------------------------------------------------------------------- the Markdown
+
+
+class Keys(dict):
+    """A `pptx` comment's keys: one `key: value` per line. A key the deck needs and doesn't find is an error."""
+
+    def __init__(self, where: str, block: str = "") -> None:
+        super().__init__(line.split(": ", 1) for line in block.strip().splitlines())
+        self.where = where
+
+    def __missing__(self, key: str):
+        raise KeyError(f"{self.where}: no `{key}` in its pptx comment")
+
+    def two(self, key: str) -> tuple[str, str]:
+        """A box's `name | detail`."""
+        name, sep, detail = self[key].partition(" | ")
+        if not sep:
+            raise RuntimeError(f"{self.where}: `{key}` is not `name | detail`")
+        return name, detail
 
 
 @dataclass
@@ -50,16 +67,27 @@ class Slide:
     animation: tuple[str, int] | None  # (m2p or acc, frame)
     caption: str
     after: str  # text after the diagram (a frame's caption, or a sentence under a table)
+    keys: Keys  # its `pptx` comment's
 
 
-def read(md: Path) -> list[Slide]:
+PPTX = r"<!-- pptx\n(.*?)-->"
+
+
+def read(md: Path) -> tuple[Keys, list[Slide]]:
+    """The deck's keys (its first `pptx` comment, before the first slide), and its slides."""
     text = md.read_text()
     text = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S)  # the front matter
     text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, flags=re.S)  # the deck's own comment
+    deck = re.match(rf"\s*{PPTX}\s*", text, re.S)
+    if not deck:
+        raise RuntimeError(f"{md}: no pptx comment for the deck, after its own comment")
+    text = text[deck.end() :]
     slides = []
     for chunk in re.split(r"\n---\n", text):
         anim = re.search(r"<!-- animation: (\w+), frame (\d+)/\d+ -->", chunk)
-        notes = " ".join(n.strip() for n in re.findall(r"<!--(.*?)-->", chunk, re.S) if "animation:" not in n)
+        block = re.search(PPTX, chunk, re.S)
+        comments = re.findall(r"<!--(.*?)-->", chunk, re.S)
+        notes = " ".join(n.strip() for n in comments if "animation:" not in n and not n.startswith(" pptx\n"))
         body = re.sub(r"<!--.*?-->", "", chunk, flags=re.S)
         body = re.sub(r"```.*?```", "", body, flags=re.S)
         title = (re.search(r"^# (.+)$", body, re.M) or [""])[0].removeprefix("# ")
@@ -78,9 +106,10 @@ def read(md: Path) -> list[Slide]:
             elif line.strip() and not line.startswith("#"):
                 after.append(line.strip())
         caption = " ".join(after) if anim else ""
+        keys = Keys(f"slide {len(slides) + 1} ({title})", block[1] if block else "")
         slides.append(Slide(title, subtitle, bullets, table, " ".join(notes.split()),
-                            (anim[1], int(anim[2])) if anim else None, caption, " ".join(after)))  # fmt: skip
-    return slides
+                            (anim[1], int(anim[2])) if anim else None, caption, " ".join(after), keys))  # fmt: skip
+    return Keys(f"{md.name}'s deck", deck[1]), slides
 
 
 # ---------------------------------------------------------------------- text
@@ -141,16 +170,15 @@ COLS = [0.35, 2.25, 4.15, 6.05, 7.95]
 ROWS = [1.28, 2.5, 3.72]
 W, H = 1.45, 0.72
 
-# A box's kind is its outline's colour, named in the legend; every box is a rounded rectangle, its text centred.
+# A box's kind is its outline's colour, named in the legend (its words: the deck's `legend.<kind>`); every box is
+# a rounded rectangle, its text centred, its words a slide's `box.<id>`: `name | detail`.
 KIND = {"you": WHITE, "computer": TEAL, "db": GREEN, "ai": PURPLE, "check": PINK, "result": ORANGE}
-LEGEND = [("you", "Your machine"), ("computer", "Compute"), ("db", "Data"), ("ai", "AI"), ("result", "Result")]
+LEGEND = ["you", "computer", "db", "ai", "result"]
 
 
 @dataclass
 class Node:
     id: str
-    name: str
-    detail: str
     kind: str
     col: int
     row: int
@@ -165,18 +193,19 @@ class Node:
 class Edge:
     a: str
     b: str
-    label: str = ""
+    labelled: bool = False  # its label: the slide's `edge.<a>-<b>`
     frame: int = 0
     dashed: bool = False
 
 
 # The animations, as timelines: one column per step, from left to right, the steps on an axis under them. Boxes
 # are outlined in their kind's colour (the legend, top right), the same at every step; the step shown has its
-# arrows and its dot on the axis in green. Nodes: id: name, detail, kind, x, y, w, frame. Edges: (from, to, label,
+# arrows and its dot on the axis in green. Their words are in frame 1's `pptx` comment: `box.<id>`,
+# `edge.<from>-<to>`, `badge.<id>`, `step.<n>`. Nodes: id: kind, x, y, w, frame. Edges: (from, to, labelled,
 # frame, how), how being line, curve (an elbow), branch (a dashed one), down or down-dashed (a bottom to a top),
 # bus (dashed: along the row of `from`, then up into `to`: a new branch), drop (along the row of `from`, then down
 # into `to`), rise or fall (straight up or down where the two boxes overlap), under (a bottom to a bottom, below
-# the rows). Results: id: word, color, and the frame it shows in when not the node's.
+# the rows). Results (a badge): id: color, and the frame it shows in when not the node's. Axis: each step's column.
 def colx(i: float) -> float:
     """Where column `i` starts; a half one sits between two columns."""
     return 0.25 + 1.4 * i
@@ -187,88 +216,73 @@ ROW = [1.3, 2.2, 3.1]
 CARD_W, CARD_H = 1.2, 0.55
 
 M2P_NODES = {
-    "you": ("Your machine", "agent m2p", "you", COL[0], ROW[0], CARD_W, 1),
-    "agent": ("m2p-agent", "the AI agent, mongo2pg", "computer", COL[0], ROW[1], CARD_W, 1),
-    "mongo": ("m2p-mongo", "MongoDB and its data", "db", COL[1], ROW[1], CARD_W, 2),
-    "pg": ("m2p-pg", "the target", "db", COL[1], ROW[2], CARD_W, 2),
-    "infer": ("mongo2pg infer", "a model, warnings", "ai", COL[2], ROW[1], CARD_W, 3),
-    "try1": ("m2p-try1", "a new branch", "db", COL[3], ROW[1], CARD_W, 4),
-    "fix1": (
-        "Analyse, fix",
-        "SQL, or the model",
-        "ai",
-        colx(3.5) + 0.1,
-        ROW[0],
-        1.0,
-        5,
-    ),  # narrower: clear of try2's rise
-    "try2": ("m2p-try2", "a new branch", "db", COL[4], ROW[1], CARD_W, 6),
-    "fix2": ("Analyse, fix", "SQL, or the model", "ai", colx(4.5) + 0.1, ROW[0], 1.0, 7),
-    "try3": ("m2p-try3", "a new branch", "db", COL[5], ROW[1], CARD_W, 8),
-    "finish": ("final.sql", "DONE.md, the tries", "result", COL[6], ROW[1], CARD_W, 9),
+    "you": ("you", COL[0], ROW[0], CARD_W, 1),
+    "agent": ("computer", COL[0], ROW[1], CARD_W, 1),
+    "mongo": ("db", COL[1], ROW[1], CARD_W, 2),
+    "pg": ("db", COL[1], ROW[2], CARD_W, 2),
+    "infer": ("ai", COL[2], ROW[1], CARD_W, 3),
+    "try1": ("db", COL[3], ROW[1], CARD_W, 4),
+    "fix1": ("ai", colx(3.5) + 0.1, ROW[0], 1.0, 5),  # narrower: clear of try2's rise
+    "try2": ("db", COL[4], ROW[1], CARD_W, 6),
+    "fix2": ("ai", colx(4.5) + 0.1, ROW[0], 1.0, 7),
+    "try3": ("db", COL[5], ROW[1], CARD_W, 8),
+    "finish": ("result", COL[6], ROW[1], CARD_W, 9),
 }
 M2P_EDGES = [
-    ("you", "agent", "", 1, "down"),
-    ("agent", "mongo", "", 2, "line"),
-    ("agent", "pg", "", 2, "curve"),
-    ("mongo", "infer", "", 3, "line"),
-    ("infer", "try1", "", 4, "line"),
-    ("pg", "try1", "branch.sh 1", 4, "bus"),
-    ("try1", "fix1", "", 5, "rise"),  # the AI reads the failed report, and fixes
-    ("fix1", "try2", "", 6, "fall"),
-    ("pg", "try2", "branch.sh 2", 6, "bus"),
-    ("try2", "fix2", "", 7, "rise"),
-    ("fix2", "try3", "", 8, "fall"),
-    ("pg", "try3", "branch.sh 3", 8, "bus"),
-    ("try3", "finish", "", 9, "line"),
-    ("finish", "pg", "", 9, "under"),  # the passing load goes into the target
+    ("you", "agent", False, 1, "down"),
+    ("agent", "mongo", False, 2, "line"),
+    ("agent", "pg", False, 2, "curve"),
+    ("mongo", "infer", False, 3, "line"),
+    ("infer", "try1", False, 4, "line"),
+    ("pg", "try1", True, 4, "bus"),
+    ("try1", "fix1", False, 5, "rise"),  # the AI reads the failed report, and fixes
+    ("fix1", "try2", False, 6, "fall"),
+    ("pg", "try2", True, 6, "bus"),
+    ("try2", "fix2", False, 7, "rise"),
+    ("fix2", "try3", False, 8, "fall"),
+    ("pg", "try3", True, 8, "bus"),
+    ("try3", "finish", False, 9, "line"),
+    ("finish", "pg", False, 9, "under"),  # the passing load goes into the target
 ]
-M2P_RESULTS = {"try1": ("FAILS", "F2545B"), "try2": ("FAILS", "F2545B"), "try3": ("PASSES", GREEN),
-               "pg": ("LOADED", GREEN, 9)}  # fmt: skip
-M2P_AXIS = [("start", 0), ("source, target", 1), ("analyse", 2), ("try 1", 3), ("fix", 3.5), ("try 2", 4),
-            ("fix", 4.5), ("try 3", 5), ("done", 6)]  # fmt: skip
+M2P_RESULTS = {"try1": ("F2545B", None), "try2": ("F2545B", None), "try3": (GREEN, None), "pg": (GREEN, 9)}
+M2P_AXIS = [0, 1, 2, 3, 3.5, 4, 4.5, 5, 6]
 M2P = (M2P_NODES, M2P_EDGES, M2P_RESULTS, 8, M2P_AXIS)
 
 ACC_NODES = {
-    "you": ("Your machine", "agent acc", "you", COL[0], ROW[0], CARD_W, 1),
-    "agent": ("acc-agent", "runs the run", "computer", COL[0], ROW[1], CARD_W, 1),
-    "gh": ("GitHub", "clone of the app", "db", COL[1], ROW[0], CARD_W, 2),
-    "app": ("acc-app", "the app, from main", "computer", COL[1], ROW[1], CARD_W, 2),
-    "mongo": ("acc-mongo", "its MongoDB, seeded", "db", COL[1], ROW[2], CARD_W, 2),
-    "infer": ("mongo2pg infer", "without the values", "ai", COL[2], ROW[1], CARD_W, 3),
-    "ai": ("acc-ai", "the AI: code, tests", "ai", COL[3], ROW[1], CARD_W, 4),
-    "build": ("Build", "the app and its tests", "computer", COL[4], ROW[1], CARD_W, 5),
-    "sb": ("acc-app-RUN", "from a checkpoint", "computer", COL[5], ROW[1], CARD_W, 6),
-    "sbdb": ("acc-pg-RUN", "the AI's postgres-init", "db", COL[5], ROW[2], CARD_W, 6),
-    "pr": ("Pull request", "from agent/RUN", "result", COL[6], ROW[1], CARD_W, 7),
+    "you": ("you", COL[0], ROW[0], CARD_W, 1),
+    "agent": ("computer", COL[0], ROW[1], CARD_W, 1),
+    "gh": ("db", COL[1], ROW[0], CARD_W, 2),
+    "app": ("computer", COL[1], ROW[1], CARD_W, 2),
+    "mongo": ("db", COL[1], ROW[2], CARD_W, 2),
+    "infer": ("ai", COL[2], ROW[1], CARD_W, 3),
+    "ai": ("ai", COL[3], ROW[1], CARD_W, 4),
+    "build": ("computer", COL[4], ROW[1], CARD_W, 5),
+    "sb": ("computer", COL[5], ROW[1], CARD_W, 6),
+    "sbdb": ("db", COL[5], ROW[2], CARD_W, 6),
+    "pr": ("result", COL[6], ROW[1], CARD_W, 7),
 }
 ACC_EDGES = [
-    ("you", "agent", "", 1, "down"),
-    ("agent", "gh", "", 2, "curve"),
-    ("agent", "app", "", 2, "line"),
-    ("app", "mongo", "", 2, "down-dashed"),
-    ("mongo", "infer", "", 3, "curve"),
-    ("infer", "ai", "", 4, "line"),  # the AI works from mongo2pg's analysis
-    ("gh", "ai", "", 4, "drop"),  # and from the clone
-    ("ai", "build", "", 5, "line"),
-    ("build", "sb", "", 6, "line"),
-    ("sb", "sbdb", "", 6, "down"),
-    ("sb", "pr", "", 7, "line"),
+    ("you", "agent", False, 1, "down"),
+    ("agent", "gh", False, 2, "curve"),
+    ("agent", "app", False, 2, "line"),
+    ("app", "mongo", False, 2, "down-dashed"),
+    ("mongo", "infer", False, 3, "curve"),
+    ("infer", "ai", False, 4, "line"),  # the AI works from mongo2pg's analysis
+    ("gh", "ai", False, 4, "drop"),  # and from the clone
+    ("ai", "build", False, 5, "line"),
+    ("build", "sb", False, 6, "line"),
+    ("sb", "sbdb", False, 6, "down"),
+    ("sb", "pr", False, 7, "line"),
 ]
-ACC_AXIS = [(label, i) for i, label in enumerate(["start", "a fresh stack", "analyse", "change", "build", "sandbox",
-                                                  "pull request"])]  # fmt: skip
+ACC_AXIS = list(range(7))
 # At the end, both apps are up on Nevia to try side by side: today's on MongoDB, the change on Postgres.
-ACC_RESULTS = {"app": ("LIVE", GREEN, 7), "sb": ("LIVE", GREEN, 7)}
+ACC_RESULTS = {"app": (GREEN, 7), "sb": (GREEN, 7)}
 ACC = (ACC_NODES, ACC_EDGES, ACC_RESULTS, 8, ACC_AXIS)
 OUTLINE, DIM = "3A3D44", "6E7078"
 
 RUNS = (
-    [
-        Node("you", "Your machine", "agent m2p | acc", "you", 0, 1),
-        Node("agent", "Agent computer", "this code, an AI agent", "computer", 2, 1),
-        Node("rest", "Everything else", "MongoDB, Postgres, branches, sandboxes, PRs", "db", 4, 1),
-    ],
-    [Edge("you", "agent", "computer, key, secrets"), Edge("agent", "rest", "makes and deletes")],
+    [Node("you", "you", 0, 1), Node("agent", "computer", 2, 1), Node("rest", "db", 4, 1)],
+    [Edge("you", "agent", labelled=True), Edge("agent", "rest", labelled=True)],
 )
 
 
@@ -297,8 +311,8 @@ def box(slide, x, y, w, h, name, detail, kind, *, size=10.0):  # noqa: PLR0913, 
     return s
 
 
-def node_shape(slide, n: Node, box_: tuple[float, float, float, float] | None = None):
-    return box(slide, *(box_ or n.box), n.name, n.detail, n.kind)
+def node_shape(slide, n: Node, keys: Keys):
+    return box(slide, *n.box, *keys.two(f"box.{n.id}"), n.kind)
 
 
 def anchors(a: Node, b: Node) -> tuple[float, float, float, float]:
@@ -327,54 +341,66 @@ def arrow(slide, x1, y1, x2, y2, color=GREY, width=1.0, *, dashed=False, head=Tr
     return c
 
 
-def edge_shapes(slide, e: Edge, nodes: dict[str, Node]) -> list:
+def edge_shapes(slide, e: Edge, nodes: dict[str, Node], keys: Keys) -> list:
     x1, y1, x2, y2 = anchors(nodes[e.a], nodes[e.b])
     out = [arrow(slide, x1, y1, x2, y2, dashed=e.dashed)]
-    width = 0.065 * len(e.label) + 0.12  # at 7 pt
-    if e.label and (y1 != y2 or width < abs(x2 - x1) - 0.04):  # only where it fits: the captions say the rest
+    label = keys[f"edge.{e.a}-{e.b}"] if e.labelled else ""
+    width = 0.065 * len(label) + 0.12  # at 7 pt
+    if label and (y1 != y2 or width < abs(x2 - x1) - 0.04):  # only where it fits: the captions say the rest
         mx, my = (x1 + x2) / 2, (y1 + y2) / 2 - (0.17 if y1 == y2 else 0)
-        out.append(textbox(slide, mx - width / 2, my - 0.11, width, 0.22, [e.label], 7, GREY, align=PP_ALIGN.CENTER,
+        out.append(textbox(slide, mx - width / 2, my - 0.11, width, 0.22, [label], 7, GREY, align=PP_ALIGN.CENTER,
                            anchor=MSO_ANCHOR.MIDDLE, fill=DARK))  # fmt: skip
     return out
 
 
-def triangle(slide) -> None:
-    """The migration: the app at the top, MongoDB and Postgres at the base, and where m2p and acc act."""
-    node_shape(slide, Node("app", "The app", "its code, its API", "computer", 0, 0), (2.65, 1.3, 1.7, 0.62))
-    node_shape(slide, Node("mongo", "MongoDB", "the source", "db", 0, 0), (0.6, 3.55, 1.5, 0.8))
-    node_shape(slide, Node("pg", "PostgreSQL", "the target", "db", 0, 0), (4.9, 3.55, 1.5, 0.8))
+def triangle(slide, keys: Keys) -> None:
+    """The migration: the app at the top, MongoDB and Postgres at the base, and where m2p and acc act. Its words:
+    the slide's `box.<id>`, `link.before` and `link.after`, and `agent.<acc|m2p>` (`name | detail`)."""
+    box(slide, 2.65, 1.3, 1.7, 0.62, *keys.two("box.app"), "computer")
+    box(slide, 0.6, 3.55, 1.5, 0.8, *keys.two("box.mongo"), "db")
+    box(slide, 4.9, 3.55, 1.5, 0.8, *keys.two("box.pg"), "db")
     # the sides: the app's link to its database, before and after
     arrow(slide, 2.95, 1.92, 1.35, 3.55, dashed=True, head=False)
     arrow(slide, 4.05, 1.92, 5.65, 3.55)
-    textbox(slide, 0.6, 2.45, 1.4, 0.25, ["today"], 9, GREY, align=PP_ALIGN.RIGHT)
-    textbox(slide, 5.0, 2.45, 1.4, 0.25, ["after"], 9, GREY)
+    textbox(slide, 0.6, 2.45, 1.4, 0.25, [keys["link.before"]], 9, GREY, align=PP_ALIGN.RIGHT)
+    textbox(slide, 5.0, 2.45, 1.4, 0.25, [keys["link.after"]], 9, GREY)
     # mongo2pg's assessment of MongoDB, in the middle: the input both agents start from
-    node_shape(slide, Node("assess", "Assessment", "mongo2pg: types, a model", "ai", 0, 0), (2.7, 3.12, 1.6, 0.46))
+    box(slide, 2.7, 3.12, 1.6, 0.46, *keys.two("box.assess"), "ai")
     arrow(slide, 2.0, 3.62, 2.7, 3.35, dashed=True)
     arrow(slide, 3.5, 3.12, 3.5, 2.9, dashed=True)
     arrow(slide, 3.5, 3.58, 3.5, 3.9, dashed=True)
     # acc moves the app's link from one side to the other, its words above; m2p the data along the base, below
-    for y, color, name, detail, x1, x2, ty in (
-        (2.85, PURPLE, "acc · moves the code", "JDBC, tested in a sandbox", 2.4, 4.6, 2.22),
-        (3.95, PINK, "m2p · moves the data", "tries on branches, checked row by row", 2.2, 4.8, 4.0),
-    ):
+    for y, color, agent, x1, x2, ty in ((2.85, PURPLE, "acc", 2.4, 4.6, 2.22), (3.95, PINK, "m2p", 2.2, 4.8, 4.0)):
+        name, detail = keys.two(f"agent.{agent}")
         arrow(slide, x1, y, x2, y, color, 3)
         textbox(slide, 1.9, ty, 3.2, 0.26, [f"**{name}**"], 11, color, align=PP_ALIGN.CENTER)
         textbox(slide, 1.9, ty + 0.26, 3.2, 0.24, [detail], 8.5, GREY, align=PP_ALIGN.CENTER)
 
 
-def legend(slide) -> None:
+LEGEND_Y, LEGEND_SIZE, LEGEND_DOT, LEGEND_GAP, LEGEND_CHAR, LEGEND_SPACE = 0.5, 6.2, 0.07, 0.05, 0.05, 0.12
+
+
+def legend(slide, deck: Keys) -> None:
     """The kinds' colours, top right: a dot and a word each."""
-    widths = [0.2 + 0.042 * len(word) for _, word in LEGEND]
-    x = 9.43 - sum(widths)
-    for (kind, word), w in zip(LEGEND, widths, strict=True):
-        dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(0.47), Inches(0.07), Inches(0.07))
+    words = [deck[f"legend.{kind}"] for kind in LEGEND]
+    # Each item: its dot, a gap, its word (Inter at LEGEND_SIZE is about LEGEND_CHAR wide a character, never
+    # less), then the gap to the next; the row ends at the slide's right margin, every word centred on its dot.
+    widths = [LEGEND_DOT + LEGEND_GAP + LEGEND_CHAR * len(word) for word in words]
+    x = 9.43 - sum(widths) - LEGEND_SPACE * (len(words) - 1)
+    for kind, word, w in zip(LEGEND, words, widths, strict=True):
+        dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(LEGEND_Y - LEGEND_DOT / 2),
+                                     Inches(LEGEND_DOT), Inches(LEGEND_DOT))  # fmt: skip
         dot.fill.solid()
         dot.fill.fore_color.rgb = rgb(KIND[kind])
         dot.line.fill.background()
         dot.shadow.inherit = False
-        textbox(slide, x + 0.08, 0.42, w - 0.08, 0.16, [word], 6.2, GREY)
-        x += w
+        tb = textbox(slide, x + LEGEND_DOT + LEGEND_GAP, LEGEND_Y - 0.08, w - LEGEND_DOT - LEGEND_GAP, 0.16, [word],
+                     LEGEND_SIZE, GREY, anchor=MSO_ANCHOR.MIDDLE)  # fmt: skip
+        tf = tb.text_frame
+        tf.word_wrap = False  # one line, whatever the estimate: a word never wraps under its dot
+        tf.auto_size = MSO_AUTO_SIZE.NONE
+        tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
+        x += w + LEGEND_SPACE
 
 
 def route(how: str, a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> list:
@@ -399,15 +425,15 @@ def route(how: str, a: tuple[float, float, float, float], b: tuple[float, float,
     return [(ax + aw, ay + ah / 2, bx, by + bh / 2)]
 
 
-def timeline(slide, spec) -> tuple[dict[int, list], dict[int, list]]:
+def timeline(slide, spec, labels: Keys, deck: Keys) -> tuple[dict[int, list], dict[int, list]]:
     """The shapes by the frame in which they appear, and the highlights (green) shown during that frame only: its
     arrows and its dot on the axis. A box keeps its colour from one step to the next."""
     nodes, edges, results, size, axis = spec
     shown: dict[int, list] = {}
     lit: dict[int, list] = {}
-    legend(slide)
-    boxes = {k: (x, y, w, CARD_H) for k, (_, _, _, x, y, w, _) in nodes.items()}
-    for a, b, label, frame, how in edges:
+    legend(slide, deck)
+    boxes = {k: (x, y, w, CARD_H) for k, (_, x, y, w, _) in nodes.items()}
+    for a, b, labelled, frame, how in edges:
         ax, ay, aw, ah = boxes[a]
         bx, by, bw, bh = boxes[b]
         legs = route(how, boxes[a], boxes[b])
@@ -415,18 +441,18 @@ def timeline(slide, spec) -> tuple[dict[int, list], dict[int, list]]:
         for color, into in ((DIM, shown), (GREEN, lit)):
             for n, pts in enumerate(legs, 1):
                 into.setdefault(frame, []).append(arrow(slide, *pts, color, dashed=dashed, head=n == len(legs)))
-        if label:  # a new branch's by its tap; a line's above it
-            mono = how == "bus"
-            lx, ly = (bx + bw / 2 + 0.04, by + bh + 0.1) if mono else ((ax + aw + bx) / 2 - 0.4, ay + ah / 2 - 0.26)
-            align = PP_ALIGN.LEFT if mono else PP_ALIGN.CENTER
-            tb = textbox(slide, lx, ly, 0.8, 0.2, [f"`{label}`" if mono else label], 6.5, GREY, align=align)
+        if labelled:  # a new branch's by its tap; a line's above it
+            tap = how == "bus"
+            lx, ly = (bx + bw / 2 + 0.04, by + bh + 0.1) if tap else ((ax + aw + bx) / 2 - 0.4, ay + ah / 2 - 0.26)
+            align = PP_ALIGN.LEFT if tap else PP_ALIGN.CENTER
+            tb = textbox(slide, lx, ly, 0.8, 0.2, [labels[f"edge.{a}-{b}"]], 6.5, GREY, align=align)
             shown[frame].append(tb)
-    for k, (name, detail, kind, *_, frame) in nodes.items():
+    for k, (kind, *_, frame) in nodes.items():
         x, y, w, h = boxes[k]
-        shown.setdefault(frame, []).append(box(slide, x, y, w, h, name, detail, kind, size=size))
-        word, color, *later = results.get(k, ("", ""))
-        if word:
-            at = later[0] if later else frame
+        shown.setdefault(frame, []).append(box(slide, x, y, w, h, *labels.two(f"box.{k}"), kind, size=size))
+        if k in results:
+            color, later = results[k]
+            word, at = labels[f"badge.{k}"], later or frame
             badge = textbox(
                 slide,
                 x + w - 0.95,
@@ -440,18 +466,20 @@ def timeline(slide, spec) -> tuple[dict[int, list], dict[int, list]]:
                 anchor=MSO_ANCHOR.TOP,
             )  # in the top right corner, over the name
             shown.setdefault(at, []).append(badge)
-    steps(slide, axis, shown, lit)
+    steps(slide, axis, labels, shown, lit)
     return shown, lit
 
 
-def steps(slide, axis: list[str], shown: dict[int, list], lit: dict[int, list]) -> None:
-    """The time axis under a timeline: a dot per step, filled once reached, green while shown."""
+def steps(slide, axis: list[float], labels: Keys, shown: dict[int, list], lit: dict[int, list]) -> None:
+    """The time axis under a timeline: a dot per step (its label `step.<n>`), filled once reached, green while
+    shown."""
     if not axis:
         return
     y, r = 4.0, 0.06
-    xs = [colx(i) + CARD_W / 2 for _, i in axis]
+    xs = [colx(i) + CARD_W / 2 for i in axis]
     arrow(slide, xs[0], y, xs[-1] + 0.35, y, OUTLINE, 1)
-    for n, (x, (label, _)) in enumerate(zip(xs, axis, strict=True), 1):
+    for n, x in enumerate(xs, 1):
+        label = labels[f"step.{n}"]
         for color, into in ((OUTLINE, None), (DIM, shown), (GREEN, lit)):
             dot = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x - r), Inches(y - r), Inches(2 * r), Inches(2 * r))
             dot.fill.solid()
@@ -460,21 +488,21 @@ def steps(slide, axis: list[str], shown: dict[int, list], lit: dict[int, list]) 
             dot.shadow.inherit = False
             if into is not None:
                 into.setdefault(n, []).append(dot)
-        textbox(slide, x - 0.6, y + 0.1, 1.2, 0.22, [f"{n} · {label}"], 7, DIM, align=PP_ALIGN.CENTER)
-        tb = textbox(slide, x - 0.6, y + 0.1, 1.2, 0.22, [f"**{n} · {label}**"], 7, GREEN, align=PP_ALIGN.CENTER,
+        textbox(slide, x - 0.6, y + 0.1, 1.2, 0.22, [label], 7, DIM, align=PP_ALIGN.CENTER)
+        tb = textbox(slide, x - 0.6, y + 0.1, 1.2, 0.22, [f"**{label}**"], 7, GREEN, align=PP_ALIGN.CENTER,
                      fill=DARK)  # fmt: skip
         lit[n].append(tb)
 
 
-def diagram(slide, spec) -> dict[int, list]:
+def diagram(slide, spec, keys: Keys) -> dict[int, list]:
     """The diagram's shapes, by the frame in which they appear (0: at once)."""
     nodes, edges = spec
     by_id = {n.id: n for n in nodes}
     frames: dict[int, list] = {}
     for e in edges:  # under the nodes
-        frames.setdefault(e.frame, []).extend(edge_shapes(slide, e, by_id))
+        frames.setdefault(e.frame, []).extend(edge_shapes(slide, e, by_id, keys))
     for n in nodes:
-        frames.setdefault(n.frame, []).append(node_shape(slide, n))
+        frames.setdefault(n.frame, []).append(node_shape(slide, n, keys))
     return frames
 
 
@@ -504,7 +532,7 @@ def notes(slide, text: str) -> None:
         slide.notes_slide.notes_text_frame.text = text
 
 
-def content(prs, eyebrow: str, title: str, footer: str = "From MongoDB to PostgreSQL, with AI agents on Nevia"):
+def content(prs, eyebrow: str, title: str, footer: str):
     s = prs.slides.add_slide(layout(prs, CONTENT))
     ph(s, 3).text_frame.text = eyebrow
     ph(s, 0).text_frame.text = title
@@ -519,6 +547,33 @@ def bullets_into(placeholder, items: list[str], size: float = 13) -> None:
         pPr.set("marL", "0")
         pPr.set("indent", "0")
         pPr.insert(0, etree.fromstring('<a:buNone xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>'))
+
+
+# A text-only slide's body: below the title, above the footer, its bullets spread over the height (as Marp's
+# `space-evenly`), in the largest size up to SPREAD_MAX at which they fit. Inter's average character is about
+# half its size wide; a line is 1.2 of it high.
+SPREAD_TOP, SPREAD_BOTTOM, SPREAD_MAX, SPREAD_MIN = 1.3, 5.1, 20.0, 13.0
+
+
+def spread_into(body, items: list[str]) -> None:
+    width, height = 8.81, SPREAD_BOTTOM - SPREAD_TOP
+    place(body, SPREAD_TOP, height)
+
+    def lines(size: float) -> int:
+        per_line = width * 72 / (0.52 * size)  # characters
+        return sum(math.ceil((len(re.sub(r"[*`]", "", i)) + 3) / per_line) for i in items)
+
+    size = SPREAD_MAX
+    while size > SPREAD_MIN and lines(size) * 1.2 * size / 72 > 0.7 * height:  # a gap of 30% at least
+        size -= 1
+    gap = (height - lines(size) * 1.2 * size / 72) / (len(items) + 1)  # inches, above, between and below
+    bullets_into(body, items, size)
+    frame = body.text_frame
+    frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    frame.margin_top = frame.margin_bottom = 0
+    for i, para in enumerate(frame.paragraphs):
+        para.space_before = Pt(0)
+        para.space_after = Pt(0 if i == len(items) - 1 else gap * 72)
 
 
 def table_into(slide, rows: list[list[str]], y: float) -> None:
@@ -570,65 +625,65 @@ def build(template: Path) -> None:
         prs.part.drop_rel(sid.rId)
         ids.remove(sid)
 
-    md = read(DOCS / "presentation.md")
-    main = [s for s in md if not s.animation]
-    frames = {k: [s for s in md if s.animation and s.animation[0] == k] for k in ("m2p", "acc")}
+    deck, (cover, *slides) = read(DOCS / "presentation.md")
+    labels = {s.animation[0]: s.keys for s in slides if s.animation and s.animation[1] == 1}  # in frame 1's
 
     # 1. The cover.
-    c = main[0]
     s = prs.slides.add_slide(layout(prs, COVER))
-    ph(s, 0).text_frame.text = c.title.upper()
-    ph(s, 1).text_frame.text = c.subtitle
-    ph(s, 2).text_frame.text = "NEVIA · TWO AI AGENTS · M2P AND ACC"
-    notes(s, " ".join(c.bullets) + " " + c.notes)
+    ph(s, 0).text_frame.text = cover.keys["title"]
+    ph(s, 1).text_frame.text = cover.subtitle
+    ph(s, 2).text_frame.text = cover.keys["kicker"]
+    notes(s, cover.notes)
 
-    for i, sl in enumerate(main[1:], 1):
-        s = content(prs, EYEBROWS[i], sl.title)
+    for sl in slides:  # in the Markdown's order: each animation's frames after the slide that introduces it
+        if sl.animation:
+            animated(prs, sl, M2P if sl.animation[0] == "m2p" else ACC, labels[sl.animation[0]], deck)
+            continue
+        s = content(prs, sl.keys["eyebrow"], sl.title, deck["footer"])
         body = ph(s, 1)
+        kind = sl.keys.get("layout")  # the slide's diagram, if any
         if sl.table:  # Nevia's concepts
             drop(s, 1)
             table_into(s, sl.table, 1.35)
             textbox(s, 0.59, 4.7, 8.8, 0.3, [sl.after], 11, GREY)
-        elif sl.title.startswith("The migration"):
-            triangle(s)
+        elif kind == "triangle":
+            triangle(s, sl.keys)
             body.left, body.top, body.width, body.height = Inches(6.8), Inches(1.3), Inches(2.8), Inches(3.2)
             body.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
             bullets_into(body, sl.bullets, 10.5)
-        elif sl.title.startswith("How it runs"):
-            diagram(s, RUNS)
+        elif kind == "runs":
+            diagram(s, RUNS, sl.keys)
             for shape in s.shapes:  # this diagram on the grid's first row
                 if not shape.is_placeholder:
                     shape.top -= Inches(1.0)
             place(body, 2.75, 2.3)
             bullets_into(body, sl.bullets, 12)
+        elif kind is None:
+            spread_into(body, sl.bullets)
         else:
-            bullets_into(body, sl.bullets)
+            raise RuntimeError(f"{sl.keys.where}: no layout `{kind}`")
         notes(s, sl.notes)
-        for agent, spec in (("m2p", M2P), ("acc", ACC)):
-            if sl.title.endswith(f": {agent}"):
-                animated(prs, agent, spec, frames[agent])
 
     s = prs.slides.add_slide(layout(prs, CLOSING))
-    ph(s, 0).text_frame.text = "THANK YOU"
-    notes(s, "agent m2p setup && agent m2p run; agent acc setup && agent acc run migrate")
+    ph(s, 0).text_frame.text = deck["closing"]
+    notes(s, deck["closing-notes"])
     prune(prs)
     prs.save(str(OUT))
     print(f"{OUT}: {len(prs.slides)} slides")  # noqa: T201 - a script
 
 
-def animated(prs, agent: str, spec, frames: list[Slide]) -> None:
-    """The agent's steps, one slide each, a click apart: what a step adds is drawn from its slide on, green on its
-    own. Going back a step is going back a slide, in any app, a PDF included."""
-    for n, f in enumerate(frames, 1):
-        s = content(prs, f"{agent.upper()} · STEP BY STEP", f"How {agent} works, step by step")
-        drop(s, 1)
-        shown, lit = timeline(s, spec)
-        later = [x for k, xs in shown.items() if k > n for x in xs] + [x for k, xs in lit.items() if k != n for x in xs]
-        for shape in later:
-            shape._element.getparent().remove(shape._element)
-        title, _, rest = f.caption.partition("** ")
-        textbox(s, 0.59, 4.6, 8.8, 0.62, [f"**{n}/{len(frames)} · {title.strip('*')}** {rest}"], 11)
-        notes(s, f.caption.replace("**", ""))
+def animated(prs, f: Slide, spec, labels: Keys, deck: Keys) -> None:
+    """A step of an agent's animation, a slide of its own, a click from the next: what a step adds is drawn from its
+    slide on, green on its own. Going back a step is going back a slide, in any app, a PDF included."""
+    n = f.animation[1]
+    s = content(prs, f.keys["eyebrow"], f.keys["title"], deck["footer"])
+    drop(s, 1)
+    shown, lit = timeline(s, spec, labels, deck)
+    later = [x for k, xs in shown.items() if k > n for x in xs] + [x for k, xs in lit.items() if k != n for x in xs]
+    for shape in later:
+        shape._element.getparent().remove(shape._element)
+    textbox(s, 0.59, 4.6, 8.8, 0.62, [f.keys["caption"]], 11)
+    notes(s, f.caption.replace("**", ""))
 
 
 if __name__ == "__main__":

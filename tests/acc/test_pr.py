@@ -1,6 +1,6 @@
 import pytest
 
-from acc import pr
+from acc import config, pr
 
 
 def test_proposal_takes_the_title_and_body_tags() -> None:
@@ -20,10 +20,11 @@ def test_proposal_of_a_failed_ai_says_why() -> None:
         pr.proposal({"is_error": True, "subtype": "error_max_turns", "num_turns": 150}, "Claude Code")
 
 
-def test_body_has_the_analysis_the_feature_check_and_the_preview() -> None:
+def test_body_has_the_analysis_the_feature_check_and_the_preview(settings: config.Settings) -> None:
+    copilot = settings.ai.model_copy(update={"engine": "copilot"})
     v = pr.Validation(
         stack="acc-app", base_branch="main", sandbox="acc-app-261029120000", checkpoint="acc-261029120000",
-        kind="mongo", database="a fork", url="https://sb.example", ai="GitHub Copilot CLI", analysis="| Collection |",
+        kind="mongo", database="a fork", url="https://sb.example", ai=copilot, analysis="| Collection |",
         feature_check="curl ...", feature_log="\x1b[1mok\x1b[0m total",
     )  # fmt: skip
     text = pr.body("## Task\nTotals.", v, "261029120000")
@@ -33,7 +34,8 @@ def test_body_has_the_analysis_the_feature_check_and_the_preview() -> None:
     assert "ok total" in text and "\x1b" not in text
     assert "acc clean --run 261029120000" in text
     assert "Given to GitHub Copilot CLI" in text
-    assert text.endswith(pr.footer("GitHub Copilot CLI"))
+    assert text.endswith(pr.footer(copilot))
+    assert "Generated with [GitHub Copilot CLI](https://github.com/features/copilot/cli)" in text  # by its engine
 
 
 def test_report_has_the_steps_the_cost_and_what_is_left() -> None:

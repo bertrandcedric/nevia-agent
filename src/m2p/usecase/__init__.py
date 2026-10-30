@@ -11,8 +11,6 @@ from importlib import resources
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-COLLECTION = "customers"  # the source has no data while this collection is empty
-
 
 def file(name: str) -> bytes:
     return resources.files(__package__).joinpath(name).read_bytes()
@@ -30,7 +28,7 @@ STRANGE = _strange()  # the kinds of anomalies seed.py can add
 
 
 class Seed(BaseModel):
-    """The `[seed]` settings: `seed.py --help` says what each one does."""
+    """The `[m2p.seed]` settings: `seed.py --help` says what each one does."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     customers: int

@@ -12,7 +12,8 @@ The AI agent is Claude Code, or GitHub Copilot CLI with `[ai] engine = "copilot"
 models go through the Aiven AI gateway.
 
 A 10-slide deck of this path, with an animated diagram of each agent, to present it: [docs/presentation.md](docs/presentation.md) (Marp), and as PowerPoint in Aiven's brand template, [docs/presentation.pptx](docs/presentation.pptx)
-(`uv run --with python-pptx docs/make_pptx.py` makes it again from the Markdown).
+(`uv run --with python-pptx docs/make_pptx.py` makes it again from the Markdown); how its slides are built, for
+the next deck: [docs/presentation-guidelines.md](docs/presentation-guidelines.md).
 
 ## The migration
 
@@ -82,7 +83,8 @@ uv run agent acc setup
   the env var `gateway_secret` names; an empty `ai.claude.gateway_url` means a Claude Code login on the agent
   computer instead.
 - **Workspaces**: each agent works in its own Nevia workspace, `m2p.nevia.workspace` and `acc.nevia.workspace`
-  (`m2p` and `acc`), which `setup` makes if it isn't there, with you as its admin.
+  (`m2p` and `acc`), which `setup` makes if it isn't there, with you as its admin. `agent --workspace NAME ...`
+  (or `AGENT_WORKSPACE`, in the shell or `.env`) uses another, for every command: `setup` there first.
 - **Names**: everything an agent makes on Nevia carries its name, so that the two could share a workspace too:
   resources `m2p-...` and `acc-...` (a setting that breaks this is refused), workspace secrets `M2P_...` and
   `ACC_...`.
@@ -95,8 +97,10 @@ From there, the agent does everything else (databases, branches, sandboxes, pull
 key; your machine only follows it.
 
 Both sides drive Nevia with the **`nevia` CLI** (`src/core/nevia.py`): yours, signed in with `nevia login`, and
-the agent computer's (`[runtime] nevia`), signed in with its key, which its AI uses too. Only the tunnels
-(the agent's link to a MongoDB computer) go through nevia-kit: the CLI has none.
+the agent computer's (`[runtime] nevia`), signed in with its key (m2p's AI uses it too; acc's AI has a
+viewer's key of its own). The agent computer's CLI is pinned, so it runs with `NEVIA_NO_UPDATE_CHECK` (yours
+still offers a newer release). Only the tunnels (the agent's link to a MongoDB computer) go through nevia-kit:
+the CLI has none.
 
 ```mermaid
 flowchart LR
@@ -123,12 +127,12 @@ Each agent has the same six, `uv run agent <m2p|acc> <command>`:
 
 | Command | What it does |
 | --- | --- |
-| `setup` | Makes or finishes the agent computer, its key and secrets, sends it this code; the agent then prepares the rest. Safe to repeat. |
-| `run` | Starts a run on the agent computer and follows it until it ends; Ctrl-C stops only the following, and `run` again (acc: `run resume`) follows it. acc's takes a mode: `migrate`, `task "..."` or `resume`. |
-| `status` | The run's state and the agent's latest actions, from any terminal. |
+| `setup` | Makes or finishes the agent computer, its key and secrets, sends it this code; the agent then prepares the rest. Safe to repeat; m2p's replaces its MongoDB with a fresh branch of a seed computer, seeded again only when `[m2p.seed]` changed. |
+| `run` | Starts a run on the agent computer and follows it until it ends, then puts that computer to sleep (m2p's run ends by resetting the passwords the AI saw, and after a pass protects the target and copies it into `<target>-loaded`); Ctrl-C stops only the following, and `run` again (acc: `run resume`) follows it. acc's takes a mode: `migrate`, `task "..."` or `resume`; its stack step deletes the earlier runs' sandboxes (their preview URLs go away). |
+| `status` | The run's state and the agent's latest actions, from any terminal, and Nevia's operations still running in the workspace (`nevia ops`), one line each. |
 | `stop` | Stops the agent; what it made stays. |
 | `clean` | Deletes a run's work, for a fresh run. Lists it and asks first (`--yes` doesn't). |
-| `destroy` | The agent deletes what it made, then your machine the agent computer, its key and secrets. Lists it all and asks first (`--yes` doesn't). |
+| `destroy` | The agent deletes what it made (clearing a database's protection first), then your machine the agent computer, its key and secrets. Lists it all and asks first (`--yes` doesn't). |
 
 Results land in `build/m2p-runs/` and `build/acc-runs/`.
 
@@ -138,8 +142,11 @@ Results land in `build/m2p-runs/` and `build/acc-runs/`.
   service that needs it); none is printed, and connection URIs are scrubbed from logs.
 - `clean` and `destroy` touch only the names in `agent.toml` and those made from them.
 - Each agent computer holds its own *editor* key on the workspace (a week, renewed by deleting its secret and
-  running `setup`), in a mode-600 file, and so does its AI, through the CLI: it reaches its agent's workspace
-  only, which is why each has its own.
+  running `setup`), in a mode-600 file: it reaches its agent's workspace only, which is why each has its own.
+  m2p's AI uses it through the CLI; acc's AI gets a *viewer* key of its own (`acc-agent-ai`, its key file in
+  `ACC_NEVIA_AI_KEY`, renewed the same way): it can look at the workspace, not change it, run commands on a
+  computer or read a database's connection. Only an admin adds a principal, so your machine makes both, and
+  `destroy` removes both.
 
 ## Code
 
