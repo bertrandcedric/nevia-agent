@@ -1,5 +1,6 @@
 """`m2p`: an agent on Nevia works out the hello MongoDB to PostgreSQL migration with mongo2pg."""
 
+import json
 import os
 import re
 import time
@@ -10,6 +11,7 @@ from typing import Annotated
 
 import typer
 
+from core.agent import ai
 from core.config import BUILD_DIR
 from core.local.bootstrap import Bootstrap, Wanted
 from core.local.collect import Collect
@@ -87,8 +89,9 @@ def run_id(pc: Computer, loop_dir: str) -> str:
 
 def collect(s: config.Settings, nevia: Nevia, dest: Path | None = None) -> Path:
     """The run's results here, in `build/m2p-runs/<run>/` (`core.local.collect`, as acc's): the agent's files in
-    LOOP (notes, scripts, its mongo2pg projects in tries/, and `logs/session-N.log`, one per AI session)
-    and the agent job's log; then `final.sql`, all the SQL the target was loaded with."""
+    LOOP (notes, scripts, its mongo2pg projects in tries/, `logs/ai-N.*`, one per AI session, and the run's
+    result.json and report.md, as acc's) and the agent job's log; then `final.sql`, all the SQL the target was
+    loaded with."""
     pc = Computer(s.agent.computer, nevia, settings=s)
     dest = dest or RUNS_DIR / run_id(pc, s.agent.dir)
     c = Collect([s.agent.dir], COLLECT_SKIP, {"agent-job.log": f"{JOBS_DIR}/{AGENT_JOB}.log"})
@@ -102,6 +105,9 @@ def collect(s: config.Settings, nevia: Nevia, dest: Path | None = None) -> Path:
     if final := final_sql(dest / "tries" / "final", s.postgres.name):
         (dest / FINAL_SQL).write_text(final)
         console.log(f"the SQL {s.postgres.name} was loaded with: {dest / FINAL_SQL}")
+    if (f := dest / ai.RESULT).is_file() and "total_cost_usd" in (res := json.loads(f.read_text())):
+        console.log(f"{s.ai.name}: {ai.usd(res['total_cost_usd'])} over {res.get('sessions', '?')} sessions "
+                    f"(its estimate, at list prices): {dest / ai.REPORT}")  # fmt: skip
     return dest
 
 

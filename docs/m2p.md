@@ -79,8 +79,10 @@ sequenceDiagram
   `tries/tryN/`, and `tries/final/` for `m2p-pg`
 - `final.sql`: all the SQL `m2p-pg` was loaded with, in order: the DDL the final import applied, then
   `normalize.sql`
-- `logs/session-N.log`: one line per thing the agent did in each AI session (its raw events in
-  `session-N.jsonl`), and `agent-job.log`
+- `report.md`: the outcome, each AI session's end, turns, time and cost, and the tokens by model; `result.json`,
+  the sessions' results summed (with Claude Code, `total_cost_usd`: its estimate at list prices)
+- `logs/ai-N.log`: one line per thing the agent did in AI session N, its end line with the session's cost (its
+  raw events in `ai-N.jsonl`, its result in `ai-N.json`), and `agent-job.log`
 - `skipped.txt`: files over 20 MiB left on the computer, as are each load's CSV export, the tools and the binary
 
 If the download fails three times, `run` again collects them.

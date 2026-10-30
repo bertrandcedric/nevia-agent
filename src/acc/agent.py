@@ -323,7 +323,7 @@ class Agent:
         """The AI on the change, followed as it goes. A run taken up again follows the job still going, takes the
         result of one that ended with one, and starts the AI again otherwise."""
         pc, rd, job = self.computer(), self.run_dir(st.id), f"ai-{st.id}"
-        has_result = pc.sh(f"test -s ~/{rd}/result.json && echo yes || true").strip() == "yes"
+        has_result = pc.sh(f"test -s ~/{rd}/{ai.RESULT} && echo yes || true").strip() == "yes"
         if not pc.job_running(job) and not has_result:
             home = pc.sh("echo $HOME").strip()
             env = ai_env(self.settings)
@@ -346,11 +346,11 @@ class Agent:
             self._fetch_result(st)
             if st.kind == "migrate":
                 self._drop_dev_db(st.id)
-        if not (st.path / "result.json").is_file():
+        if not (st.path / ai.RESULT).is_file():
             raise RuntimeError(
                 f"{self.settings.ai.name} ended without a result: `agent acc run resume` starts it again"
             )
-        result = json.loads((st.path / "result.json").read_text())
+        result = json.loads((st.path / ai.RESULT).read_text())
         st.title, st.text = pr.proposal(result, self.settings.ai.name)
         self.show(f"the AI's proposal: {st.title}")
         if not pc.sh(f"git -C ~/{rd}/repo status --porcelain").strip():
@@ -362,7 +362,7 @@ class Agent:
 
     def activity(self, run: str, start: int = 0) -> list[str]:
         """The AI's lines in the run's log (tools/render-<engine>.jq's), from line `start` on."""
-        log = f"~/{self.run_dir(run)}/logs/ai.log"
+        log = f"~/{ai.log(Path(self.run_dir(run)), 1)}"
         out = self.computer().sh(f"test -f {log} && tail -n +{start + 1} {log} || true")
         return [redact(line) for line in out.splitlines()]
 
@@ -373,9 +373,9 @@ class Agent:
             self.show(line)
 
     def _fetch_result(self, st: RunState) -> None:
-        f = f"{self.run_dir(st.id)}/result.json"
+        f = f"{self.run_dir(st.id)}/{ai.RESULT}"
         if self.computer().sh(f"test -s ~/{f} && echo yes || true").strip():
-            (st.path / "result.json").write_bytes(self.computer().download(f))
+            (st.path / ai.RESULT).write_bytes(self.computer().download(f))
 
     def _drop_dev_db(self, run: str) -> None:
         db, sec = self._dev_db(run)
@@ -459,7 +459,7 @@ class Agent:
 
     def write_report(self, st: RunState) -> Path:
         result = None
-        if (f := st.path / "result.json").is_file():
+        if (f := st.path / ai.RESULT).is_file():
             result = json.loads(f.read_text())
         try:
             left = self.left(st.id)
@@ -470,7 +470,7 @@ class Agent:
             started=st.started, outcome=st.outcome or "going", ai=self.settings.ai.name,
             steps=list(st.durations.items()), pr_url=st.pr_url, sandbox_url=st.sandbox_url, result=result, left=left,
         )  # fmt: skip
-        path = st.path / "report.md"
+        path = st.path / ai.REPORT
         path.write_text(pr.report(r))
         cost = (
             f", {self.settings.ai.name} ${float(result['total_cost_usd']):.2f}"

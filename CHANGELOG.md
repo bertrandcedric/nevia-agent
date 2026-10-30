@@ -9,8 +9,15 @@ All notable changes to this project are documented here. The format follows
 
 - A GitHub Actions workflow, `.github/workflows/ci.yml`: ruff, `bash -n` and the TOML files on every push to
   main and every pull request, without Nevia or nevia-kit; ty and pytest stay local.
+- m2p collects the AI's cost: each session's result in `logs/ai-N.json` and its cost on its end line, the run's
+  total in `result.json` and `report.md` (as acc's), and `run` prints it after collecting.
 
 ### Changed
+
+- Both agents' runs name the AI's files alike (`core.agent.ai`): `logs/ai-N.log`, `ai-N.jsonl`, `ai-N.json`
+  per session (acc's `logs/ai.log` and `ai.jsonl` are `ai-1.*`, m2p's `logs/session-N.*` are `ai-N.*`), and
+  `result.json` (`ai.total`, the sessions summed) and `report.md` at the run's root; acc's report's AI part is
+  `ai.report`, which m2p's uses too.
 
 - Each agent has its own Nevia workspace, `[m2p.nevia]` and `[acc.nevia]` (`m2p`, `acc`), instead of a shared
   `[nevia]`; `setup` makes it if need be. An agent's editor key, and acc's AI's, reaches its own only.

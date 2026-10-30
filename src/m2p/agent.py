@@ -34,7 +34,7 @@ CLEAN_KEEP = ("AGENTS.md", "tools", "bin", "mongo2pg")
 
 ACTIVITY_LINES = 200  # lines `status` reads, the last of the latest session log
 SEP = "@@m2p@@"  # between the parts of `status`'s output; ATTEMPTS.md may hold `---` lines
-SESSION_LINE = shlex.quote(r"^[0-9T:-]+Z session [0-9]+ (started|ended with [0-9]+)$")  # from steps.loop
+SESSION_LINE = shlex.quote(r"^[0-9T:-]+Z session [0-9]+ (started|ended with [0-9]+(, \$[0-9.]+)?)$")  # steps.loop's
 
 
 def activity(lines: str) -> list[Activity]:
@@ -243,8 +243,8 @@ class Loop:
         out = pc.sh(
             f"cd ~/{d}; test -f DONE.md && echo done=1 || echo done=0; "
             # The start and end lines steps.loop writes in each session's log, oldest session first.
-            f"echo {SEP}; ls -tr logs/session-*.log 2>/dev/null | xargs -r grep -hE {SESSION_LINE} | tail -n 6; "
-            f"echo {SEP}; latest=$(ls -t logs/session-*.log 2>/dev/null | head -1); "
+            f"echo {SEP}; ls -tr logs/ai-*.log 2>/dev/null | xargs -r grep -hE {SESSION_LINE} | tail -n 6; "
+            f"echo {SEP}; latest=$(ls -t logs/ai-*.log 2>/dev/null | head -1); "
             # An event's first line starts with its time; the lines under it are its output.
             f'[ -z "$latest" ] || grep -nE "^[0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}} " "$latest" | tail -n {ACTIVITY_LINES} '
             f'| sed "s|^|$(basename "$latest"):|"; '

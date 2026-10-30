@@ -86,4 +86,5 @@ A step that fails stops the run with no pull request. Each step is recorded once
 `run resume --from STEP` from an earlier one (e.g. `--from sandbox`: the sandbox again, not the AI); `run`
 brings the state, the report and the pull request text back to `build/acc-runs/RUN/`.
 `build/acc-runs/RUN/report.md` has the outcome, the time of each step, the AI's turns (with Claude Code, its
-cost estimate at list prices) and what the run left on Nevia; `clean --run RUN` deletes that.
+cost estimate at list prices) and what the run left on Nevia; `clean --run RUN` deletes that. The AI's files
+have m2p's names: `result.json` and `report.md` at the root, `logs/ai-1.log`, `ai-1.jsonl` and `ai-1.json`.

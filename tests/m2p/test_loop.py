@@ -82,7 +82,7 @@ def test_status_reads_the_tries(agent: Loop, fake: FakeApi) -> None:
     fake.on_exec(
         "DONE.md",
         "done=0\n@@m2p@@\nsession 1 started\n@@m2p@@\n"
-        "session-1.log:3:13:34:05 $ tools/branch.sh 1\n"
+        "ai-1.log:3:13:34:05 $ tools/branch.sh 1\n"
         "@@m2p@@\n# Attempts\n---\n## Try 1: FAILED\n",
     )
     st = agent.status()
@@ -90,7 +90,7 @@ def test_status_reads_the_tries(agent: Loop, fake: FakeApi) -> None:
     assert "Try 1: FAILED" in st.attempts
     assert st.sessions == "session 1 started"
     assert not st.done
-    assert st.activity == [loop.Activity("session-1.log:3", "13:34:05", "$ tools/branch.sh 1")]
+    assert st.activity == [loop.Activity("ai-1.log:3", "13:34:05", "$ tools/branch.sh 1")]
 
 
 def test_the_guide_names_the_mongo2pg_release(agent: Loop, fake: FakeApi) -> None:
@@ -128,13 +128,13 @@ def _targz(files: dict[str, bytes]) -> bytes:
 def test_collect_brings_the_results_here_without_uris(agent: Loop, fake: FakeApi, tmp_path) -> None:
     archive = _targz({
         "ATTEMPTS.md": b"# Attempts\nloaded postgres://avnadmin:s3cret@host:5432/hello\n",
-        "logs/session-1.log": b"19:21:31 says: loaded\n",
+        "logs/ai-1.log": b"19:21:31 says: loaded\n",
     })  # fmt: skip
     stage = (agent.name, ".nevia-agent/collect.tar.gz")
     fake.on_exec("tar -czf", lambda argv, body: fake.files.update({stage: archive}) or "")
     dest = cli.collect(agent.settings, agent.nevia, tmp_path / "run")
     assert (dest / "ATTEMPTS.md").read_text() == "# Attempts\nloaded postgres://avnadmin:***@host:5432/hello\n"
-    assert (dest / "logs" / "session-1.log").exists()
+    assert (dest / "logs" / "ai-1.log").exists()
     [pack] = [s for s in fake.scripts() if "tar -czf" in s]
     assert "format-patch" not in pack
     assert all(f"--exclude=./{shlex.quote(p)}" in pack for p in cli.COLLECT_SKIP)
@@ -193,7 +193,7 @@ def test_activity_summarizes_what_the_agent_does(tmp_path) -> None:
     raw = tmp_path / "raw"
     raw.write_text("".join(json.dumps(e) + "\n" for e in _EVENTS))
     # What status takes from the session log: its events' first lines, numbered.
-    lines = [f"session-1.log:{n}:{line}" for n, line in enumerate(_render(raw).splitlines(), 1) if line[:2].isdigit()]
+    lines = [f"ai-1.log:{n}:{line}" for n, line in enumerate(_render(raw).splitlines(), 1) if line[:2].isdigit()]
     assert [(a.time, a.text, a.failed) for a in loop.activity("\n".join(lines))] == [
         ("13:34:01", "intent: Creating try 2", False),
         ("13:34:02", "$ psql postgres://u:***@h/db", False),
@@ -328,6 +328,36 @@ def test_the_sessions_refuse_to_start_without_their_renderer(agent: Loop, tmp_pa
     (tmp_path / agent.dir / "tools").mkdir(parents=True)
     with pytest.raises(RuntimeError, match=r"tools/render-claude\.jq is missing"):
         steps.loop(agent.settings, 1)
+
+
+def test_each_session_keeps_its_result_and_the_run_its_total(agent: Loop, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(steps, "HOME", tmp_path)
+    d = tmp_path / agent.dir
+    for f in (f"tools/{ai.render(agent.settings.ai)}", "tools/common.jq", "AGENTS.md"):
+        (d / f).parent.mkdir(parents=True, exist_ok=True)
+        (d / f).write_text("")
+    (d / "RUN").write_text("261029170000\n")
+    end = {"type": "result", "subtype": "success", "num_turns": 3, "total_cost_usd": 1.234, "duration_ms": 2000,
+           "modelUsage": {"m": {"inputTokens": 5, "costUSD": 1.234}}}  # fmt: skip
+
+    def session(cmd, *, cwd, env, render, log) -> int:
+        log.with_suffix(".jsonl").write_text(f"junk\n{json.dumps(end)}\n")
+        if log.name == "ai-2.log":
+            (d / "DONE.md").write_text("done")
+        return 0
+
+    monkeypatch.setattr(ai, "session", session)
+    assert steps.loop(agent.settings, 3) == "done, Claude Code $2.47"
+    assert json.loads((d / "logs/ai-1.json").read_text()) == end
+    ended = (d / "logs/ai-2.log").read_text().splitlines()[-1]
+    assert ended.endswith(" session 2 ended with 0, $1.23")
+    assert re.search(shlex.split(loop.SESSION_LINE)[0], ended)
+    total = json.loads((d / ai.RESULT).read_text())
+    assert (total["sessions"], total["num_turns"], total["total_cost_usd"]) == (2, 6, 2.468)
+    assert total["modelUsage"]["m"]["inputTokens"] == 10
+    report = (d / ai.REPORT).read_text()
+    assert report.startswith("# Run 261029170000\n") and "| 2 | 0 | 3 | 2 s | $1.2340 |" in report
+    assert "- cost: **$2.4680**" in report
 
 
 def test_stop_does_not_kill_itself(agent: Loop, fake: FakeApi) -> None:

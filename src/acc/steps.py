@@ -208,9 +208,9 @@ def ai_command(s: Settings, d: Path, env: dict[str, str]) -> list[str]:
 
 
 def ai_session(s: Settings, rid: str) -> None:
-    """The AI on the clone: its events rendered into logs/ai.log as they come (and kept in ai.jsonl), its result
-    into result.json. Its env: this step's (the gateway, a migration's DATABASE_URL and PG_CA_FILE,
-    and their PG* variables)."""
+    """The AI on the clone: its events rendered into logs/ai-1.log as they come (and kept in ai-1.jsonl), its
+    result into ai-1.json and result.json (`core.agent.ai`'s names, as m2p's). Its env: this step's (the gateway,
+    a migration's DATABASE_URL and PG_CA_FILE, and their PG* variables)."""
     d = run_dir(s, rid)
     (d / "work").mkdir(exist_ok=True)
     (d / "logs").mkdir(exist_ok=True)
@@ -221,12 +221,13 @@ def ai_session(s: Settings, rid: str) -> None:
     }
     if "DATABASE_URL" in env:
         env |= pg_env(env["DATABASE_URL"], env["PG_CA_FILE"])
-    log, render = d / "logs/ai.log", HOME / s.agent.dir / "tools" / ai.render(s.ai)
+    log, render = ai.log(d, 1), HOME / s.agent.dir / "tools" / ai.render(s.ai)
     rc = ai.session(ai_command(s, d, env), cwd=d / "repo", env=os.environ | env, render=render, log=log)
     result = ai.result(s.ai, log.with_suffix(".jsonl").read_text().splitlines())
     if result is None:
         raise RuntimeError(f"{s.ai.name} ended with {rc}, without a result: {log}")
-    (d / "result.json").write_text(json.dumps(result) + "\n")
+    log.with_suffix(".json").write_text(json.dumps(result) + "\n")
+    (d / ai.RESULT).write_text(json.dumps(ai.total([result])) + "\n")
 
 
 def app_jar(repo: Path) -> Path:

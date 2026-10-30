@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.agent import ai
+
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 LINKS = {
     "Claude Code": "https://claude.com/claude-code",
@@ -113,10 +115,6 @@ def _dur(seconds: float) -> str:
     return f"{s // 60}m{s % 60:02d}s"
 
 
-def _usd(x: Any) -> str:
-    return f"${float(x or 0):.4f}"
-
-
 def report(r: Report) -> str:
     """The run's report: its outcome, the time of each step, the AI's turns (Claude Code's cost) and what it left
     on Nevia."""
@@ -129,19 +127,7 @@ def report(r: Report) -> str:
     out += [f"| {name} | {_dur(s)} |" for name, s in r.steps]
     out += [f"| **total** | **{_dur(sum(s for _, s in r.steps))}** |", "", f"## {r.ai}", ""]
     if res := r.result:
-        if "total_cost_usd" in res:
-            out.append(f"- cost: **{_usd(res['total_cost_usd'])}** (Claude Code's estimate, at list prices: a "
-                       "gateway bills its own)")  # fmt: skip
-        ended = f", ended with {res.get('subtype')}" if res.get("is_error") else ""
-        secs, api = int(res.get("duration_ms") or 0) // 1000, int(res.get("duration_api_ms") or 0) // 1000
-        out += [f"- {res.get('num_turns', '?')} turns, {secs} s (API {api} s){ended}", ""]
-        if res.get("modelUsage"):
-            out += ["| Model | Input | Output | Cache read | Cache write | Cost |", "|---|---:|---:|---:|---:|---:|"]
-        for model, u in (res.get("modelUsage") or {}).items():
-            tokens = [
-                u.get(k, 0) for k in ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
-            ]
-            out.append(f"| `{model}` | {' | '.join(map(str, tokens))} | {_usd(u.get('costUSD'))} |")
+        out += ai.report(res)
     else:
         out.append(f"No result: {r.ai} did not finish (stopped, or the run failed before).")
     out += ["", "## Nevia", "", f"Left by the run (`agent acc clean --run {r.run}` deletes them):", ""]

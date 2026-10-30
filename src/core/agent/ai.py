@@ -16,6 +16,10 @@ from core.shell import console
 BIN = ".local/bin"  # its binary's directory, under its user's home
 TOOLS = ("common.jq", "render-claude.jq", "render-copilot.jq")  # in core/scripts, for the agents' tools directory
 ENV_PREFIXES = ("ANTHROPIC_", "COPILOT_")  # its settings in a job's env, which a step passes on to it
+# A run's files, both agents' alike: each AI session's in logs/ (`log`), and at the run's root its result over
+# all of them (`total`) and its report.
+RESULT, REPORT = "result.json", "report.md"
+USAGE = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD")
 
 
 def binary(ai: Ai) -> str:
@@ -24,6 +28,11 @@ def binary(ai: Ai) -> str:
 
 def render(ai: Ai) -> str:
     return f"render-{ai.engine}.jq"
+
+
+def log(run_dir: Path, n: int) -> Path:
+    """Session `n`'s rendered events, from 1: its raw events are next to it (`.jsonl`), its result too (`.json`)."""
+    return run_dir / "logs" / f"ai-{n}.log"
 
 
 def tools() -> dict[str, bytes]:
@@ -143,3 +152,42 @@ def result(ai: Ai, events: list[str]) -> dict[str, Any] | None:
         "result": next((r for r in reversed(replies) if r.strip()), ""),
         "duration_ms": (ends[-1].get("usage") or {}).get("sessionDurationMs", 0),
     }  # fmt: skip
+
+
+def total(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sessions' results as one, in `result`'s shape: the last one's end and reply, their turns, times, cost and
+    tokens summed, and `sessions`, how many."""
+    out: dict[str, Any] = dict(results[-1]) if results else {}
+    for k in ("num_turns", "duration_ms", "duration_api_ms", "total_cost_usd"):
+        if any(k in r for r in results):
+            out[k] = sum(r.get(k) or 0 for r in results)
+    models: dict[str, dict[str, float]] = {}
+    for r in results:
+        for model, u in (r.get("modelUsage") or {}).items():
+            m = models.setdefault(model, {})
+            for k in USAGE:
+                m[k] = m.get(k, 0) + (u.get(k) or 0)
+    if models:
+        out["modelUsage"] = models
+    return out | {"sessions": len(results)}
+
+
+def usd(x: Any) -> str:
+    return f"${float(x or 0):.4f}"
+
+
+def report(res: dict[str, Any]) -> list[str]:
+    """A result's lines in a run's report: its cost (Claude Code's), turns and times, and its tokens by model."""
+    out = []
+    if "total_cost_usd" in res:
+        out.append(f"- cost: **{usd(res['total_cost_usd'])}** (Claude Code's estimate, at list prices: a "
+                   "gateway bills its own)")  # fmt: skip
+    ended = f", ended with {res.get('subtype')}" if res.get("is_error") else ""
+    secs, api = int(res.get("duration_ms") or 0) // 1000, int(res.get("duration_api_ms") or 0) // 1000
+    out += [f"- {res.get('num_turns', '?')} turns, {secs} s (API {api} s){ended}", ""]
+    if res.get("modelUsage"):
+        out += ["| Model | Input | Output | Cache read | Cache write | Cost |", "|---|---:|---:|---:|---:|---:|"]
+    for model, u in (res.get("modelUsage") or {}).items():
+        tokens = [u.get(k, 0) for k in USAGE[:-1]]
+        out.append(f"| `{model}` | {' | '.join(str(int(n)) for n in tokens)} | {usd(u.get('costUSD'))} |")
+    return out
